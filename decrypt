@@ -1,0 +1,2 @@
+#!/bin/bash
+gpg --output - $1

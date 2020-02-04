@@ -1,0 +1,58 @@
+#!/bin/bash
+function publish_to_bitbucket_with_name {
+  repository_name=$1
+  username=colorfulfool
+
+  if ! git remote add origin git@bitbucket.org:$username/$repository_name.git
+  then
+    exit 1
+  fi
+
+  # echo 'Bitbucket Username?'
+  # read username
+  echo 'Bitbucket Password?'
+  read -s password  # -s flag hides password text
+
+  curl -X POST --user $username:$password https://api.bitbucket.org/2.0/repositories/$username/$repository_name --data is_private='true'
+
+  git push -u origin --all
+  git push -u origin --tags
+}
+
+if [ "$1" == "backup" ] || [ "$1" == "publish" ]
+then
+  current_path=`pwd`
+  current_directory=`basename "$current_path"`
+
+  publish_to_bitbucket_with_name $current_directory
+fi
+
+if [ "$1" == "restore" ] || [ "$1" == "clone" ]
+then
+  username=colorfulfool
+  repository_name=$2
+  
+  if [ -z "$repository_name" ] || ! git clone git@bitbucket.org:$username/$repository_name.git
+  then
+    open "https://bitbucket.org/dashboard/repositories?search=${repository_name}"
+  fi
+fi
+
+if [ "$1" == "time" ] || [ "$1" == "estimate" ]
+then
+  repository=$2
+  bitbucket clone $repository && coded4 $repository && rm -rf $repository
+fi
+
+if [ "$1" == "open" ]
+then
+  username=colorfulfool
+  repository=$2
+  
+  open "https://bitbucket.org/${username}/${repository}"
+fi
+  
+if [ "$1" == "" ]
+then
+  git remote -v | grep -E 'origin|bitbucket' --colour
+fi

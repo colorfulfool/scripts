@@ -1,0 +1,16 @@
+#!/bin/bash
+
+COLOR='\033[0;33m'
+STOPCOLOR='\033[0m' # No Color
+
+ARGUMENT=$*
+
+function run_command {
+  printf "\033c"
+  rails test $ARGUMENT
+}
+
+printf "${COLOR}Watching `pwd`, running rails test $*${STOPCOLOR}\n"
+
+run_command
+fswatch -o `pwd`/app `pwd`/config `pwd`/lib `pwd`/db `pwd`/test | { while read x ; do run_command; done }
