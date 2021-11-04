@@ -1,28 +1,11 @@
 #!/usr/local/bin/python3
 
-from fabric import Connection, connection
-from invoke import Responder
 from sys import argv
+import subprocess
 
-password = Responder(
-  pattern=r'[Pp]assword:',
-  response='LinuxPassw0rd123\n',
-)
-
-identity = Responder(
-  pattern=r'Choose identity to authenticate as \(1-2\):',
-  response='1\n',
-)
-
-connection = Connection('asvla.git.access@asvla-2')
-
-remote_command = {
-  'connect': '',
-  'restart': 'sudo /opt/asvla/site/site-restart.sh && sudo /opt/asvla/backoffice/backoffice-restart.sh && systemctl restart nopCommerce430.service'
-}[argv[1]]
-
-connection.run(
-  f'ssh centos@vm01.dev01.asvla.com -t "{remote_command}"', 
-  pty=True, 
-  watchers=[password, identity]
-)
+if argv[1] == 'db:pull':
+  process = subprocess.Popen(
+    ['mongodump', '--uri=mongodb+srv://heroku:K5LmJBnN11sQKeo3@cluster0.putle.mongodb.net'], 
+    cwd='/Users/antonkhamets'
+  )
+  process.wait()
