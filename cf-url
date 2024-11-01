@@ -1,0 +1,10 @@
+#!/usr/bin/ruby
+
+url = "https://feature-reg-flow-freespins-i.asvla-site-frontend.pages.dev"
+url.split("//")[1].split(".")[0]
+maxlen = url.split("//")[1].split(".")[0].length
+branch = `git branch --show-current`
+subdomain = branch[0..maxlen-1].sub("/", "-")
+repo_name = `basename $(awk '{print $NF;exit}' .git/FETCH_HEAD) .git`.strip
+
+puts "https://#{subdomain}.#{repo_name}.pages.dev"
