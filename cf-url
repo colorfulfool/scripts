@@ -5,6 +5,6 @@ url.split("//")[1].split(".")[0]
 maxlen = url.split("//")[1].split(".")[0].length
 branch = `git branch --show-current`
 subdomain = branch[0..maxlen-1].sub("/", "-").strip
-repo_name = `basename $(awk '{print $NF;exit}' .git/FETCH_HEAD) .git`.strip
+repo_name = `basename $(awk '{print $NF}' .git/FETCH_HEAD) .git`.strip
 
 puts "https://#{subdomain}.#{repo_name}.pages.dev"
