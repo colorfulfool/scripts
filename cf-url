@@ -6,4 +6,4 @@ branch = `git branch --show-current`
 subdomain = branch[0..maxlen-1].sub("/", "-").strip
 repo_name = `basename $(awk '{print $NF}' .git/FETCH_HEAD) .git`.strip
 
-puts "https://#{subdomain}.#{repo_name}.pages.dev"
+print "https://#{subdomain}.#{repo_name}.pages.dev"
