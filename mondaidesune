@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+if [ $# -lt 1 ] || [[ $* =~ --help ]]; then
+  echo "Usage: mondaidesune UNIT [--audio]" "$1"
+  exit
+fi
+
+UNIT=$1
+
+if [[ $* =~ --audio ]]; then
+  kikoeru $UNIT
+fi
+
+MINNA_II="/Users/antonkhamets/Library/Mobile Documents/iCloud~com~apple~iBooks/Documents/Main Textbook II Part 2 2013.pdf"
+
+if [[ $UNIT -lt 26 ]]; then
+  echo "Minna I not supported"
+  exit 1
+else
+  open "$MINNA_II"
+  PAGE=$(( (2+($UNIT-26)*8)+3 ))
+  echo "Open page $PAGE"
+fi

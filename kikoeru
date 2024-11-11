@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+if [ $# -lt 1 ] || [[ $* =~ --help ]]; then
+  echo "Usage: kikoeru UNIT"
+  exit
+fi
+
+UNIT=$1
+
+if [[ $UNIT -lt 26 ]]; then
+  open "https://soundcloud.com/unagibun/dai-$UNIT-ka-mondai-1?in=unagibun/sets/mnn-1"
+else
+  open "https://soundcloud.com/stefen-hobars/dai-$UNIT-ka-mondai-1?in=stefen-hobars/sets/minna-no-nihongo-ii"
+fi
