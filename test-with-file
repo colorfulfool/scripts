@@ -1,0 +1,32 @@
+#!/bin/bash
+
+COL='\033[0;33m'
+NC='\033[0m' # No Color
+
+TARGET=$1
+COMMAND=$2
+PORT=$3
+
+function run_command {
+  printf "\033c"
+
+  if [ -n "$PORT" ]; then
+    pids=$(lsof -i ":$PORT" | awk 'NR==2 {print $2}')
+
+    if [ -n "$pids" ]; then
+      kill -9 $pids
+    fi
+
+    while [ -z "lsof -i :$PORT" ]; do
+      echo "Port $PORT still taken, waiting..."
+      sleep 1
+    done
+  fi
+
+  $COMMAND &
+}
+
+printf "${COL}Watching $TARGET, running $*${NC}\n"
+
+run_command
+fswatch -o "$TARGET" | { while read; do run_command; done }
