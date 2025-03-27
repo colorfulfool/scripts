@@ -6,7 +6,7 @@ if [ $# -lt 1 ] || [ "${#1}" -lt 4 ]; then
 fi
 
 CACHE_KEY=$1
-CACHE_FILE="jisho-cache/$CACHE_KEY.json"
+CACHE_FILE="/Users/antonkhamets/.scripts/jisho-cache/$CACHE_KEY.json"
 
 if [ ! -f $CACHE_FILE ]; then
   http GET https://jisho.org/api/v1/search/words?keyword=$CACHE_KEY > $CACHE_FILE
