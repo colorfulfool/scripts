@@ -2,8 +2,15 @@
 
 url = "https://feature-reg-flow-freespins-i.asvla-site-frontend.pages.dev"
 maxlen = url.split("//")[1].split(".")[0].length
+
 branch = `git branch --show-current`
-subdomain = branch[0..maxlen-1].sub("/", "-").strip
-repo_name = `basename $(awk '{print $NF}' .git/FETCH_HEAD) .git`.strip
+if branch.strip == "main"
+  print "https://asvla-stg.com"
+  exit
+end
+
+subdomain = branch[0..maxlen-1].sub("/", "-").strip.chomp("-")
+
+repo_name = `basename $(awk '{print $NF}' .git/FETCH_HEAD) .git`.split("\n")[0].strip
 
 print "https://#{subdomain}.#{repo_name}.pages.dev"
