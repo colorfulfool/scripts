@@ -11,14 +11,14 @@ function run_command {
   printf "\033c"
 
   if [ -n "$PORT" ]; then
-    pids=$(lsof -i ":$PORT" | awk 'NR==2 {print $2}')
+    while lsof -i :$PORT > /dev/null; do
+      echo "Port $PORT is taken, killing..."
+      pids=$(lsof -i ":$PORT" | awk 'NR==2 {print $2}')
 
-    if [ -n "$pids" ]; then
-      kill -9 $pids
-    fi
+      if [ -n "$pids" ]; then
+        kill -9 $pids
+      fi
 
-    while [ -z "lsof -i :$PORT" ]; do
-      echo "Port $PORT still taken, waiting..."
       sleep 1
     done
   fi
