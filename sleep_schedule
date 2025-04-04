@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+~/Personal/sleep_schedule/sleep_schedule | grep -C 1 `date -v+1d +"%d.%m"`
