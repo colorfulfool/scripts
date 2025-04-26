@@ -1,0 +1,8 @@
+#!/bin/bash
+
+if [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ]; then
+  echo "Already on main, aborting"
+  exit 1
+fi
+
+git switch main && git commit && git switch - && git merge main

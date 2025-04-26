@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+if [[ $# < 2 ]]; then
+  echo "Usage: copy-from-another-branch BRANCH PATH"
+  exit 1
+fi
+
+git checkout $1 -- $2
