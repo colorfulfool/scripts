@@ -1,0 +1,12 @@
+#!/usr/bin/ruby
+
+url = "https://feature-reg-flow-freespins-i.asvla-site-frontend.pages.dev"
+maxlen = url.split("//")[1].split(".")[0].length
+
+branch = `git branch --show-current`
+if branch.strip == "main"
+  print "Main (Latest)"
+  exit
+end
+
+print branch.sub(%r{^[^/]*/}, "").split("-").map(&:capitalize).join(" ")
