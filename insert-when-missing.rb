@@ -13,6 +13,16 @@ class CLI < Thor
     end
   end
 
+  desc "add_beginning TRIGGER BEGINNING", "Adds line at the beginning" 
+  def add_beginning(trigger, beginning)
+    files(trigger, beginning).each do |filename|
+      puts "#{filename} y/n?"
+      if $stdin.getch != "y" then next end
+
+      insert_beginning filename, beginning
+    end
+  end
+
   desc "add_hook TRIGGER HOOK [IMPORT]", "Adds import" 
   def add_hook(trigger, hook, import)
     files(trigger, hook).each do |filename|
@@ -36,6 +46,11 @@ class CLI < Thor
   def insert_import(filename, import)
     imports, *rest = File.read(filename).split(/^$/)
     File.write filename, [imports, import, "\n", *rest].join("")
+  end
+
+  def insert_beginning(filename, beginning)
+    content = File.read(filename)
+    File.write filename, [beginning, content].join("\n")
   end
 
   def insert_hook(filename, hook)
