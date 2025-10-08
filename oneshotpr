@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+if [ $# -eq 2 ]; then
+  kind=$1
+  title=$2
+elif [ $# -eq 1 ]; then
+  kind="feature"
+  title=$1
+else
+  echo "Usage: one-shor-pr [chore|feature|fix] TITLE"
+  exit 1
+fi
+
+if [[ $(git branch --show-current) = "main" ]]; then
+  branch=$(echo "$kind/$title" | tr -d "'" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | head -c 25)
+  was_on_main=1
+
+  if git branch -v | grep $branch; then
+    echo "We're on main, switching to the branch..."
+    git checkout $branch  
+  else
+    echo "We're on main, creating a branch..."
+    git checkout -b $branch  
+  fi
+fi
+
+if git status | grep -q "Changes not staged for commit"; then
+  git add .
+fi
+
+if git status | grep -q "Changes to be committed"; then
+  git commit -m "$title"
+fi
+
+gh pr create --fill --title "$title" && cf-url | pbcopy
+echo "Created PR, copied preview URL to clipboard."
+
+if (( was_on_main )); then
+  echo "Going back to main..."
+  git switch main
+fi
