@@ -6,6 +6,12 @@ case $1 in
   story|storybook)
     bash bin/tools/dev/bun-install-run-storybok.sh 6006
     ;;
+  build)
+    bun run build
+    ;;
+  check|typecheck)
+    bunx tsc --noEmit
+    ;;
   *)
     echo "Supported commands: dev, storybook"
     ;;
