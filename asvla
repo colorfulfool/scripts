@@ -1,0 +1,12 @@
+#!/usr/bin/bash
+case $1 in
+  dev)
+    bash bin/tools/dev/bun-install-run-dev.sh 3000
+    ;;
+  story|storybook)
+    bash bin/tools/dev/bun-install-run-storybok.sh 6006
+    ;;
+  *)
+    echo "Supported commands: dev, storybook"
+    ;;
+esac
