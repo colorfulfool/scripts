@@ -1,4 +1,4 @@
-#!/usr/bin/bash
+#!/usr/bin/env bash
 case $1 in
   dev)
     test-with-file .git/HEAD bin/tools/dev/bun-install-run-dev.sh 3000
@@ -13,6 +13,6 @@ case $1 in
     bunx tsc --noEmit
     ;;
   *)
-    echo "Supported commands: dev, storybook"
+    echo "Supported commands: dev, story[book], build, [type]check"
     ;;
 esac
