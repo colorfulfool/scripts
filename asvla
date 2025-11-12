@@ -1,10 +1,10 @@
 #!/usr/bin/bash
 case $1 in
   dev)
-    bash bin/tools/dev/bun-install-run-dev.sh 3000
+    test-with-file .git/HEAD bin/tools/dev/bun-install-run-dev.sh 3000
     ;;
   story|storybook)
-    bash bin/tools/dev/bun-install-run-storybok.sh 6006
+    test-with-file .git/HEAD bin/tools/dev/bun-install-run-storybok.sh 6006
     ;;
   build)
     bun run build
