@@ -1,2 +1,5 @@
 #!/usr/bin/env bash
-jisho-fetch | fzf -n 2 --bind "change:reload:sleep 0.2; jisho-fetch {q}" --disabled --layout reverse | awk '{print "https://jisho.org/word/" $1}' | xargs open
+jisho-fetch \
+| fzf -n 2 --bind "change:reload:sleep 0.2; jisho-fetch {q}" --disabled --layout reverse \
+| awk '{print "https://jisho.org/word/" $1}' \
+| xargs open
