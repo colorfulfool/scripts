@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+if pgrep "better-control"; then
+  ACTIVE_WORKSPACE=`hyprctl activeworkspace -j | jq ".id"`
+  WINDOW_WORKSPACE=`hyprctl clients -j | jq 'map(select(.class == "better_control.py"))[0].workspace.id'`
+
+  if [ "$WINDOW_WORKSPACE" == "$ACTIVE_WORKSPACE" ]; then
+    hyprctl dispatch movetoworkspacesilent "special:minimum,class:better_control.py"
+  else
+    hyprctl dispatch movetoworkspacesilent "$ACTIVE_WORKSPACE,class:better_control.py"
+  fi
+else
+  better-control $1
+fi
+
