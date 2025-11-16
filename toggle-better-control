@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
-if pgrep "better-control"; then
-  ACTIVE_WORKSPACE=`hyprctl activeworkspace -j | jq ".id"`
-  WINDOW_WORKSPACE=`hyprctl clients -j | jq 'map(select(.class == "better_control.py"))[0].workspace.id'`
 
-  if [ "$WINDOW_WORKSPACE" == "$ACTIVE_WORKSPACE" ]; then
-    hyprctl dispatch movetoworkspacesilent "special:minimum,class:better_control.py"
+is_window_visible() {
+  ACTIVE_WORKSPACE=`hyprctl activeworkspace -j | jq ".id"`
+  WINDOW_WORKSPACE=`hyprctl clients -j | jq --arg c "$1" 'map(select(.class == $c))[0].workspace.id'`
+  if [ "$WINDOW_WORKSPACE" == "$ACTIVE_WORKSPACE" ]; then return 0; else return 1; fi
+}
+hide_window() { hyprctl dispatch movetoworkspacesilent "special:minimum,class:$1"; }
+restore_window() { hyprctl dispatch movetoworkspacesilent "$ACTIVE_WORKSPACE,class:$1"; }
+
+if pgrep "better-control"; then
+  if is_window_visible "better_control.py"; then
+    hide_window "better_control.py"
   else
-    hyprctl dispatch movetoworkspacesilent "$ACTIVE_WORKSPACE,class:better_control.py"
+    restore_window "better_control.py"
   fi
 else
   better-control $1
 fi
-
