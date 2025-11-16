@@ -1,19 +1,8 @@
 #!/usr/bin/env bash
 
-is_window_visible() {
-  ACTIVE_WORKSPACE=`hyprctl activeworkspace -j | jq ".id"`
-  WINDOW_WORKSPACE=`hyprctl clients -j | jq --arg c "$1" 'map(select(.class == $c))[0].workspace.id'`
-  if [ "$WINDOW_WORKSPACE" == "$ACTIVE_WORKSPACE" ]; then return 0; else return 1; fi
-}
-hide_window() { hyprctl dispatch movetoworkspacesilent "special:minimum,class:$1"; }
-restore_window() { hyprctl dispatch movetoworkspacesilent "$ACTIVE_WORKSPACE,class:$1"; }
-
-if pgrep "better-control"; then
-  if is_window_visible "better_control.py"; then
-    hide_window "better_control.py"
-  else
-    restore_window "better_control.py"
-  fi
+PID=`pidof better-control`
+if [ -n "$PID" ]; then
+  kill -SIGUSR1 $PID
 else
   better-control $1
 fi
