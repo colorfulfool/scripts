@@ -12,7 +12,21 @@ case $1 in
   check|typecheck)
     bunx tsc --noEmit
     ;;
+  device)
+    bun run build:ios-native:dev && bun run ios-build-device
+    ;;
+  env)
+    export ACCOUNT_ID=fa89f206779976d0ce7ac1d2bc7a7b9a
+    export API_TOKEN=KhakxtNSS0pGs12R8SFN5xCgZ_Q5mmPoZSXcZrk5
+    PROJECT_NAME=asvla-site-frontend ./bin/build/scripts/read-cloudflare-env-vars.sh > cloudflare.stg.env
+    PROJECT_NAME=asvla-site-frontend-prod-sync ./bin/build/scripts/read-cloudflare-env-vars.sh > cloudflare.prod.env
+    ;;
+  capenv)
+    export CLOUDFLARE_API_TOKEN=KhakxtNSS0pGs12R8SFN5xCgZ_Q5mmPoZSXcZrk5
+    ./bin/build/scripts/sync-capawesome-env.sh stg
+    ./bin/build/scripts/sync-capawesome-env.sh prod
+    ;;
   *)
-    echo "Supported commands: dev, story[book], build, [type]check"
+    echo "Supported commands: dev, story[book], build, [type]check, device, vars"
     ;;
 esac
