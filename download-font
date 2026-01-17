@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""
+Download and fix fonts from Adobe Typekit for macOS.
+
+Usage:
+    download-font.py <url> <family> <style>
+
+Example:
+    download-font.py "https://use.typekit.net/af/807312/..." "Loos Wide" "Bold"
+"""
+
+import sys
+import os
+import subprocess
+import urllib.request
+from pathlib import Path
+
+def main():
+    if len(sys.argv) < 4:
+        print("Usage: download-font.py <url> <family> <style>")
+        print('Example: download-font.py "https://use.typekit.net/af/..." "Loos Wide" "Bold"')
+        sys.exit(1)
+
+    url = sys.argv[1]
+    family = sys.argv[2]
+    style = sys.argv[3]
+
+    # Derived names
+    family_with_style = f"{family} {style}"
+    postscript_name = f"{family.replace(' ', '')}-{style}"
+    filename = f"{postscript_name}.otf"
+
+    print(f"Downloading {family_with_style}...")
+
+    # Download font
+    tmp_path = Path(f"/tmp/{filename}")
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    with urllib.request.urlopen(req) as response:
+        data = response.read()
+        tmp_path.write_bytes(data)
+
+    print(f"Downloaded {len(data)} bytes")
+
+    # Fix font with fonttools
+    try:
+        from fontTools.ttLib import TTFont
+    except ImportError:
+        print("Installing fonttools...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "fonttools", "brotli"], check=True)
+        from fontTools.ttLib import TTFont
+
+    print("Fixing font metadata...")
+    font = TTFont(str(tmp_path))
+
+    # Remove non-standard Adobe tables
+    for table in ['DYNA', 'GDYN']:
+        if table in font:
+            del font[table]
+            print(f"  Removed {table} table")
+
+    # Fix name table with dual family naming pattern
+    name = font['name']
+    updates = [
+        (1, family_with_style),    # Family name (standalone)
+        (2, "Regular"),             # Subfamily (Regular since family has weight)
+        (4, family_with_style),     # Full name
+        (6, postscript_name),       # PostScript name
+        (16, family),               # Typographic family
+        (17, style),                # Typographic subfamily
+    ]
+
+    for nid, val in updates:
+        name.setName(val, nid, 1, 0, 0)       # Mac
+        name.setName(val, nid, 3, 1, 0x409)   # Windows
+
+    # Save to Library/Fonts
+    fonts_dir = Path.home() / "Library" / "Fonts"
+    output_path = fonts_dir / filename
+    font.save(str(output_path))
+    print(f"Saved to {output_path}")
+
+    # Remove quarantine attribute
+    subprocess.run(["xattr", "-c", str(output_path)], check=False)
+
+    # Restart font services (macOS 14+)
+    print("Restarting font services...")
+    subprocess.run(["killall", "fontd"], capture_output=True)
+    subprocess.run(["killall", "FontWorker"], capture_output=True)
+
+    print(f"\nInstalled '{family}' with style '{style}'")
+    print("Restart Figma Font Helper if needed.")
+
+if __name__ == "__main__":
+    main()
