@@ -1,5 +1,36 @@
 #!/usr/bin/env bash
 
+humanize() {
+  echo "$1" | sed -E 's|^[0-9]+-||' | tr '-' ' ' | awk '{print toupper(substr($0,1,1)) substr($0,2)}'
+}
+
+fetch_issue_type() {
+  local issue_number=$1
+  [[ -z $issue_number ]] && { echo "Issue number required" >&2; return 1; }
+
+  local issue_type=$(gh api graphql -f query="query(\$owner: String!, \$repo: String!, \$number: Int!) { repository(owner: \$owner, name: \$repo) { issue(number: \$number) { issueType { name } } } }" -f owner=Asvla -f repo=bugs-and-requests -F number="$issue_number" --jq '.data.repository.issue.issueType.name')
+
+  case $issue_type in
+    Enhancement)
+      echo "feature"
+      ;;
+    Bug)
+      echo "fix"
+      ;;
+    Task)
+      echo "chore"
+      ;;
+    Initiative)
+      echo "Error: Initiative issues cannot be converted to branch type" >&2
+      return 1
+      ;;
+    *)
+      echo "Error: Unknown issue type '$issue_type'" >&2
+      return 1
+      ;;
+  esac
+}
+
 set_asvla_issue_status() {
   project_id="PVT_kwDOBWpGXc4ASp5k"         # Asvla/bugs-and-requests
   field_id="PVTSSF_lADOBWpGXc4ASp5kzgL6fWw" # Status
@@ -7,6 +38,9 @@ set_asvla_issue_status() {
   status=$2
 
   case $status in
+    "In Progress")
+      single_select_option_id="3274b58b"
+      ;;
     "QM Ready")
       single_select_option_id="afb464af"
       ;;
@@ -52,6 +86,21 @@ case $1 in
     echo "# Fixer? I barely know 'er!"
     claude "Fix issue $2 in a separate branch and create a PR. The issue is in Asvla/bugs-and-requests repo, but fix here."
     ;;
+  start)
+    branch_title=$2
+    issue_id=$(echo $branch_title | sed -En 's|([0-9]+)-.*|\1|p')
+    if [[ -n $issue_id ]]; then
+      branch_name="$(fetch_issue_type $issue_id)/$branch_title"
+      set_asvla_issue_status $issue_id "In Progress"
+    else
+      branch_name="$(gum choose feature fix chore)/$branch_title"
+    fi
+    git checkout -b $branch_name
+    suggested_title="$(humanize $branch_title)"
+    pr_title=$(gum input --value "$suggested_title" --placeholder "PR title")
+    git push -u origin "$branch_name" --quiet
+    gh pr create --title "$pr_title" --body "" --base main --head "$branch_name" 2>/dev/null
+    ;;
   qm|greenlight)
     branch_issue_id=$(git branch --show-current | sed -n 's|^.*/\([0-9]*\)-.*|\1|p')
     issue_id="${branch_issue_id:-$2}"
@@ -60,6 +109,6 @@ case $1 in
     set_asvla_issue_status $issue_id "QM Ready"
     ;;
   *)
-    echo "Supported commands: dev, story[book], build, [type]check, device, vars"
+    echo "Supported commands: dev, story[book], build, [type]check, device, vars, start, greenlight"
     ;;
 esac
