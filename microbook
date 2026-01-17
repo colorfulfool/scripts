@@ -1,0 +1,1111 @@
+#!/usr/bin/env python3
+"""
+microbook - Process EPUB files for optimal reading experience
+
+Usage: microbook <epub_path>
+
+Features:
+- Removes <a> and <span> tags from content
+- Ensures toc.ncx specifies actual chapters
+- Ensures each top-level chapter is in a separate file
+- Downscales cover image to 400px width
+- Names output file based on book metadata and language
+"""
+
+import sys
+import os
+import re
+import zipfile
+import tempfile
+from pathlib import Path
+from xml.etree import ElementTree as ET
+from dataclasses import dataclass
+from typing import List, Optional
+
+try:
+    from PIL import Image
+except ImportError:
+    print("Error: Pillow is required. Install with: pip install Pillow")
+    sys.exit(1)
+
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    print("Error: BeautifulSoup is required. Install with: pip install beautifulsoup4 lxml")
+    sys.exit(1)
+
+# Words that indicate non-chapter entries in TOC
+NON_CHAPTER_KEYWORDS = [
+    'preface', 'предисловие', 'вступление',
+    'table of contents', 'contents', 'content', 'содержание', 'оглавление',
+    'introduction', 'введение',
+    'foreword', 'предуведомление',
+    'acknowledgment', 'благодарност',
+    'dedication', 'посвящение',
+    'epigraph', 'эпиграф',
+    'prologue', 'пролог',
+    'epilogue', 'эпилог',
+    'afterword', 'послесловие',
+    'appendix', 'приложение',
+    'index', 'указатель',
+    'glossary', 'глоссарий',
+    'bibliography', 'библиография',
+    'notes', 'примечания', 'сноски',
+    'copyright', 'авторские права',
+    'cover', 'обложка',
+    'title page', 'титульная страница',
+    'about the author', 'об авторе',
+    'also by', 'другие книги',
+]
+
+# Patterns for detecting chapter text (pattern, base_confidence)
+CHAPTER_TEXT_PATTERNS = [
+    # English
+    (r'^Chapter\s+(\d+|[IVXLCDM]+)\.?\s*(.*)$', 0.95),
+    (r'^Part\s+(\d+|[IVXLCDM]+)\.?\s*(.*)$', 0.9),
+    (r'^Section\s+(\d+)\.?\s*(.*)$', 0.85),
+    (r'^(\d+)\.\s+(.+)$', 0.8),  # "1. Title"
+    (r'^(\d+)\s+([A-ZА-Я].+)$', 0.75),  # "1 Title" (capital letter after)
+    (r'^([IVXLCDM]+)\.\s*(.*)$', 0.85),  # Roman numerals
+    # Russian
+    (r'^Глава\s+(\d+|[IVXLCDM]+)\.?\s*(.*)$', 0.95),
+    (r'^Часть\s+(\d+|[IVXLCDM]+)\.?\s*(.*)$', 0.9),
+    (r'^Раздел\s+(\d+)\.?\s*(.*)$', 0.85),
+]
+
+# CSS class patterns that indicate chapters
+CHAPTER_CLASS_PATTERNS = [
+    r'chapter',
+    r'chapnum',
+    r'chaptitle',
+    r'chapter[-_]?title',
+    r'chapter[-_]?num',
+    r'part[-_]?title',
+    r'section[-_]?title',
+]
+
+
+@dataclass
+class ChapterCandidate:
+    """A potential chapter found during detection."""
+    file_path: str
+    element_id: Optional[str]
+    title: str
+    confidence: float
+    line_number: int
+    tag_name: str
+
+
+@dataclass
+class ChapterInfo:
+    """A confirmed chapter for TOC generation."""
+    file_path: str
+    fragment: Optional[str]
+    title: str
+    play_order: int
+
+
+def extract_epub(epub_path, extract_dir):
+    """Extract EPUB contents to a directory."""
+    with zipfile.ZipFile(epub_path, 'r') as zf:
+        zf.extractall(extract_dir)
+
+
+def create_epub(source_dir, output_path):
+    """Create EPUB file from directory contents."""
+    with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        # mimetype must be first and uncompressed
+        mimetype_path = os.path.join(source_dir, 'mimetype')
+        if os.path.exists(mimetype_path):
+            zf.write(mimetype_path, 'mimetype', compress_type=zipfile.ZIP_STORED)
+
+        for root, _, files in os.walk(source_dir):
+            for file in files:
+                if file == 'mimetype':
+                    continue
+                file_path = os.path.join(root, file)
+                arcname = os.path.relpath(file_path, source_dir)
+                zf.write(file_path, arcname)
+
+
+def find_opf_path(extract_dir):
+    """Find the OPF file path from container.xml."""
+    container_path = os.path.join(extract_dir, 'META-INF', 'container.xml')
+    tree = ET.parse(container_path)
+    root = tree.getroot()
+
+    rootfile = root.find('.//{urn:oasis:names:tc:opendocument:xmlns:container}rootfile')
+    if rootfile is not None:
+        return rootfile.get('full-path')
+    return None
+
+
+def get_book_metadata(opf_path):
+    """Extract book metadata from OPF file."""
+    tree = ET.parse(opf_path)
+    root = tree.getroot()
+
+    metadata = {
+        'title': '',
+        'author': '',
+        'language': 'en',
+    }
+
+    # Get title
+    title_elem = root.find('.//{http://purl.org/dc/elements/1.1/}title')
+    if title_elem is not None and title_elem.text:
+        metadata['title'] = title_elem.text.strip()
+
+    # Get author (creator)
+    creator_elem = root.find('.//{http://purl.org/dc/elements/1.1/}creator')
+    if creator_elem is not None and creator_elem.text:
+        metadata['author'] = creator_elem.text.strip()
+
+    # Get language
+    lang_elem = root.find('.//{http://purl.org/dc/elements/1.1/}language')
+    if lang_elem is not None and lang_elem.text:
+        metadata['language'] = lang_elem.text.strip().lower()[:2]
+
+    return metadata
+
+
+def has_cyrillic(text):
+    """Check if text contains Cyrillic characters."""
+    return bool(re.search(r'[\u0400-\u04FF]', text))
+
+
+def format_author_name(author):
+    """Format author name as 'First Last'."""
+    if not author:
+        return ''
+
+    # Handle "Last, First" format
+    if ',' in author:
+        parts = [p.strip() for p in author.split(',', 1)]
+        if len(parts) == 2:
+            return f"{parts[1]} {parts[0]}"
+
+    # Handle Russian "Last First Patronymic" format
+    # Convert to "First Last" (drop patronymic)
+    if has_cyrillic(author):
+        parts = author.split()
+        if len(parts) >= 3:
+            # Скляров Андрей Юрьевич -> Андрей Скляров
+            return f"{parts[1]} {parts[0]}"
+        elif len(parts) == 2:
+            # Скляров Андрей -> Андрей Скляров
+            return f"{parts[1]} {parts[0]}"
+
+    return author
+
+
+def sanitize_filename(name):
+    """Remove invalid characters from filename."""
+    # Replace invalid characters with underscore
+    invalid_chars = '<>:"/\\|?*'
+    for char in invalid_chars:
+        name = name.replace(char, '_')
+    # Remove leading/trailing whitespace and dots
+    name = name.strip(' .')
+    return name
+
+
+def remove_tags_from_html(content, tags_to_remove):
+    """Remove specified tags from HTML/XHTML while preserving their content."""
+    # Use xml parser for XHTML content
+    soup = BeautifulSoup(content, 'xml')
+
+    for tag_name in tags_to_remove:
+        for tag in soup.find_all(tag_name):
+            tag.unwrap()
+
+    return str(soup)
+
+
+def process_content_files(extract_dir):
+    """Process all content files to remove <a> and <span> tags."""
+    # Find all HTML/XHTML files
+    for root, _, files in os.walk(extract_dir):
+        for file in files:
+            if file.endswith(('.html', '.xhtml', '.htm')):
+                file_path = os.path.join(root, file)
+
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+
+                # Remove <a> and <span> tags
+                modified_content = remove_tags_from_html(content, ['a', 'span'])
+
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(modified_content)
+
+                print(f"  Processed: {os.path.relpath(file_path, extract_dir)}")
+
+
+def find_toc_ncx(extract_dir, opf_path):
+    """Find the toc.ncx file path."""
+    opf_dir = os.path.dirname(opf_path)
+
+    # Parse OPF to find NCX file
+    tree = ET.parse(opf_path)
+    root = tree.getroot()
+
+    # Look for NCX in manifest
+    manifest = root.find('.//{http://www.idpf.org/2007/opf}manifest')
+    if manifest is not None:
+        for item in manifest.findall('.//{http://www.idpf.org/2007/opf}item'):
+            media_type = item.get('media-type', '')
+            if 'ncx' in media_type or item.get('href', '').endswith('.ncx'):
+                href = item.get('href')
+                return os.path.normpath(os.path.join(opf_dir, href))
+
+    # Fallback: look for toc.ncx directly
+    for root_dir, _, files in os.walk(extract_dir):
+        for file in files:
+            if file == 'toc.ncx':
+                return os.path.join(root_dir, file)
+
+    return None
+
+
+def is_chapter_title(title):
+    """Check if a title represents an actual chapter."""
+    if not title:
+        return False
+
+    title_lower = title.lower().strip()
+
+    # Check against non-chapter keywords
+    for keyword in NON_CHAPTER_KEYWORDS:
+        if keyword in title_lower:
+            return False
+
+    # Titles with chapter numbers are likely real chapters
+    chapter_patterns = [
+        r'^chapter\s+\d+',
+        r'^глава\s+\d+',
+        r'^\d+\.',
+        r'^[ivxlcdm]+\.',  # Roman numerals
+        r'^part\s+\d+',
+        r'^часть\s+\d+',
+    ]
+
+    for pattern in chapter_patterns:
+        if re.match(pattern, title_lower):
+            return True
+
+    # If title is reasonably long and doesn't match non-chapter patterns, consider it a chapter
+    if len(title) > 3:
+        return True
+
+    return False
+
+
+def match_heading_chapters(soup, file_path):
+    """Detect chapters from h1, h2, h3 tags."""
+    candidates = []
+
+    for tag_name in ['h1', 'h2', 'h3']:
+        for i, heading in enumerate(soup.find_all(tag_name)):
+            text = heading.get_text(strip=True)
+            if not text or len(text) < 2 or len(text) > 200:
+                continue
+
+            if not is_chapter_title(text):
+                continue
+
+            confidence = 0.9 if tag_name == 'h1' else (0.8 if tag_name == 'h2' else 0.7)
+
+            candidates.append(ChapterCandidate(
+                file_path=file_path,
+                element_id=heading.get('id'),
+                title=text,
+                confidence=confidence,
+                line_number=getattr(heading, 'sourceline', i) or i,
+                tag_name=tag_name,
+            ))
+
+    return candidates
+
+
+def match_class_based_chapters(soup, file_path):
+    """Detect chapters from class attributes."""
+    candidates = []
+
+    for element in soup.find_all(class_=True):
+        classes = element.get('class', [])
+        if isinstance(classes, str):
+            classes = [classes]
+
+        for cls in classes:
+            for pattern in CHAPTER_CLASS_PATTERNS:
+                if re.search(pattern, cls, re.IGNORECASE):
+                    text = element.get_text(strip=True)
+                    if text and 2 < len(text) < 200 and is_chapter_title(text):
+                        candidates.append(ChapterCandidate(
+                            file_path=file_path,
+                            element_id=element.get('id'),
+                            title=text[:100],
+                            confidence=0.85,
+                            line_number=getattr(element, 'sourceline', 0) or 0,
+                            tag_name=element.name,
+                        ))
+                    break
+
+    return candidates
+
+
+def match_text_pattern_chapters(soup, file_path):
+    """Detect chapters from text patterns in headings and paragraphs."""
+    candidates = []
+    search_tags = ['h1', 'h2', 'h3', 'h4', 'p', 'div']
+
+    for tag in soup.find_all(search_tags):
+        text = tag.get_text(strip=True)
+        if not text or len(text) > 200:
+            continue
+
+        for pattern, base_confidence in CHAPTER_TEXT_PATTERNS:
+            match = re.match(pattern, text, re.IGNORECASE)
+            if match:
+                confidence = base_confidence
+                if tag.name in ['h1', 'h2', 'h3']:
+                    confidence = min(1.0, confidence + 0.05)
+
+                candidates.append(ChapterCandidate(
+                    file_path=file_path,
+                    element_id=tag.get('id'),
+                    title=text,
+                    confidence=confidence,
+                    line_number=getattr(tag, 'sourceline', 0) or 0,
+                    tag_name=tag.name,
+                ))
+                break
+
+    return candidates
+
+
+def match_standalone_title_paragraphs(soup, file_path):
+    """Detect chapters from short standalone paragraphs that look like titles."""
+    candidates = []
+    paragraphs = soup.find_all('p')
+
+    for i, p in enumerate(paragraphs):
+        text = p.get_text(strip=True)
+
+        # Title-like: 5-80 chars, doesn't end with sentence punctuation
+        if not text or len(text) < 5 or len(text) > 80:
+            continue
+
+        # Skip if ends with sentence-ending punctuation
+        if text[-1] in '.!?…:;,':
+            continue
+
+        # Skip if it's just whitespace or special chars
+        if not re.search(r'[а-яёa-z]', text, re.IGNORECASE):
+            continue
+
+        # Skip non-chapter patterns
+        if not is_chapter_title(text):
+            continue
+
+        # Check if next paragraph is longer (actual content)
+        if i + 1 < len(paragraphs):
+            next_text = paragraphs[i + 1].get_text(strip=True)
+            if len(next_text) < len(text) * 2:
+                continue  # Next paragraph should be much longer
+
+        # This looks like a standalone title
+        candidates.append(ChapterCandidate(
+            file_path=file_path,
+            element_id=p.get('id'),
+            title=text,
+            confidence=0.6,  # Lower confidence for this heuristic
+            line_number=getattr(p, 'sourceline', 0) or 0,
+            tag_name='p',
+        ))
+
+    return candidates
+
+
+def detect_chapters_in_file(file_path, base_path):
+    """Detect all chapter candidates in a single content file."""
+    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+        content = f.read()
+
+    soup = BeautifulSoup(content, 'xml')
+    rel_path = os.path.relpath(file_path, base_path)
+
+    candidates = []
+    candidates.extend(match_heading_chapters(soup, rel_path))
+    candidates.extend(match_class_based_chapters(soup, rel_path))
+    candidates.extend(match_text_pattern_chapters(soup, rel_path))
+    candidates.extend(match_standalone_title_paragraphs(soup, rel_path))
+
+    return candidates
+
+
+def detect_chapters_in_content(extract_dir, opf_path):
+    """Detect chapters across all content files in spine order."""
+    opf_dir = os.path.dirname(opf_path)
+
+    tree = ET.parse(opf_path)
+    root = tree.getroot()
+    opf_ns = '{http://www.idpf.org/2007/opf}'
+
+    # Build id -> href mapping from manifest
+    manifest_items = {}
+    manifest = root.find(f'.//{opf_ns}manifest')
+    if manifest is not None:
+        for item in manifest.findall(f'{opf_ns}item'):
+            item_id = item.get('id')
+            href = item.get('href')
+            media_type = item.get('media-type', '')
+            if 'html' in media_type or 'xhtml' in media_type:
+                manifest_items[item_id] = href
+
+    # Get content files in spine order
+    content_files = []
+    spine = root.find(f'.//{opf_ns}spine')
+    if spine is not None:
+        for itemref in spine.findall(f'{opf_ns}itemref'):
+            idref = itemref.get('idref')
+            if idref in manifest_items:
+                href = manifest_items[idref]
+                file_path = os.path.normpath(os.path.join(opf_dir, href))
+                if os.path.exists(file_path):
+                    content_files.append(file_path)
+
+    # Detect chapters in each file
+    all_candidates = []
+    for file_path in content_files:
+        try:
+            candidates = detect_chapters_in_file(file_path, opf_dir)
+            all_candidates.extend(candidates)
+        except Exception:
+            continue
+
+    # Filter by minimum confidence and deduplicate
+    min_confidence = 0.55
+    filtered = [c for c in all_candidates if c.confidence >= min_confidence]
+
+    # Deduplicate by file+title (keep highest confidence)
+    seen = {}
+    for c in sorted(filtered, key=lambda x: -x.confidence):
+        key = (c.file_path, c.title)
+        if key not in seen:
+            seen[key] = c
+
+    # Sort by file order (preserve detection order within file)
+    file_order = {f: i for i, f in enumerate(content_files)}
+    selected = sorted(seen.values(), key=lambda c: (
+        file_order.get(os.path.normpath(os.path.join(opf_dir, c.file_path)), 999),
+    ))
+
+    # Convert to ChapterInfo
+    chapters = []
+    for i, c in enumerate(selected):
+        chapters.append(ChapterInfo(
+            file_path=c.file_path,
+            fragment=c.element_id,
+            title=c.title,
+            play_order=i + 1
+        ))
+
+    return chapters
+
+
+def rebuild_toc_ncx(ncx_path, chapters, book_title="Book"):
+    """Rebuild the toc.ncx file with detected chapters."""
+    if not chapters:
+        return False
+
+    ncx_ns = 'http://www.daisy.org/z3986/2005/ncx/'
+    ET.register_namespace('', ncx_ns)
+
+    # Create new NCX structure
+    ncx = ET.Element(f'{{{ncx_ns}}}ncx', {'version': '2005-1'})
+
+    # Head section
+    head = ET.SubElement(ncx, f'{{{ncx_ns}}}head')
+    ET.SubElement(head, f'{{{ncx_ns}}}meta', {'name': 'dtb:uid', 'content': 'book-id'})
+    ET.SubElement(head, f'{{{ncx_ns}}}meta', {'name': 'dtb:depth', 'content': '1'})
+    ET.SubElement(head, f'{{{ncx_ns}}}meta', {'name': 'dtb:totalPageCount', 'content': '0'})
+    ET.SubElement(head, f'{{{ncx_ns}}}meta', {'name': 'dtb:maxPageNumber', 'content': '0'})
+
+    # Doc title
+    doc_title = ET.SubElement(ncx, f'{{{ncx_ns}}}docTitle')
+    doc_text = ET.SubElement(doc_title, f'{{{ncx_ns}}}text')
+    doc_text.text = book_title
+
+    # NavMap with chapters
+    nav_map = ET.SubElement(ncx, f'{{{ncx_ns}}}navMap')
+
+    for chapter in chapters:
+        nav_point = ET.SubElement(nav_map, f'{{{ncx_ns}}}navPoint', {
+            'id': f'navPoint-{chapter.play_order}',
+            'playOrder': str(chapter.play_order)
+        })
+
+        nav_label = ET.SubElement(nav_point, f'{{{ncx_ns}}}navLabel')
+        nav_text = ET.SubElement(nav_label, f'{{{ncx_ns}}}text')
+        nav_text.text = chapter.title
+
+        # Build content src
+        src = chapter.file_path
+        if chapter.fragment:
+            src = f"{chapter.file_path}#{chapter.fragment}"
+
+        ET.SubElement(nav_point, f'{{{ncx_ns}}}content', {'src': src})
+
+    # Write NCX file
+    tree = ET.ElementTree(ncx)
+    tree.write(ncx_path, encoding='utf-8', xml_declaration=True)
+
+    return True
+
+
+def fix_toc(ncx_path, opf_path, extract_dir):
+    """Detect chapters and rebuild TOC."""
+    metadata = get_book_metadata(opf_path)
+    book_title = metadata.get('title', 'Book')
+    author = metadata.get('author', '')
+
+    chapters = detect_chapters_in_content(extract_dir, opf_path)
+
+    # Filter out entries matching book title or author
+    book_title_lower = book_title.lower().strip()
+    author_lower = author.lower().strip()
+    # Also check individual author name parts
+    author_parts = [p.strip().lower() for p in re.split(r'[\s,]+', author) if len(p.strip()) > 2]
+
+    def is_metadata_entry(title):
+        title_lower = title.lower().strip()
+        if book_title_lower and (title_lower in book_title_lower or book_title_lower in title_lower):
+            return True
+        if author_lower and (title_lower in author_lower or author_lower in title_lower):
+            return True
+        # Check if title matches any author name part (e.g., "А.Скляров")
+        for part in author_parts:
+            if part in title_lower or title_lower in part:
+                return True
+        return False
+
+    chapters = [ch for ch in chapters if not is_metadata_entry(ch.title)]
+
+    if len(chapters) < 5:
+        print(f"   Only found {len(chapters)} chapters, not enough to rebuild TOC")
+        return False
+
+    print(f"   Detected {len(chapters)} chapters:")
+    for ch in chapters[:5]:
+        print(f"     - {ch.title}")
+    if len(chapters) > 5:
+        print(f"     ... and {len(chapters) - 5} more")
+
+    # Determine NCX path
+    if not ncx_path:
+        ncx_dir = os.path.dirname(opf_path)
+        ncx_path = os.path.join(ncx_dir, 'toc.ncx')
+
+    if rebuild_toc_ncx(ncx_path, chapters, book_title):
+        return True
+
+    return False
+
+
+def analyze_toc(ncx_path, book_title=''):
+    """Analyze the TOC to check if it has proper chapters."""
+    if not ncx_path or not os.path.exists(ncx_path):
+        return {'has_chapters': False, 'total_entries': 0, 'chapter_count': 0}
+
+    tree = ET.parse(ncx_path)
+    root = tree.getroot()
+    ns = '{http://www.daisy.org/z3986/2005/ncx/}'
+
+    # Find only top-level navPoints (directly under navMap)
+    nav_map = root.find(f'.//{ns}navMap')
+    if nav_map is None:
+        return {'has_chapters': False, 'total_entries': 0, 'chapter_count': 0}
+
+    nav_points = nav_map.findall(f'{ns}navPoint')
+
+    total_entries = len(nav_points)
+    chapter_count = 0
+    chapters = []
+
+    # Normalize book title for comparison
+    book_title_lower = book_title.lower().strip() if book_title else ''
+
+    for nav_point in nav_points:
+        text_elem = nav_point.find(f'.//{ns}text')
+        if text_elem is not None and text_elem.text:
+            title = text_elem.text.strip()
+            title_lower = title.lower()
+
+            # Skip if title matches book title
+            if book_title_lower and (title_lower == book_title_lower or
+                                      title_lower in book_title_lower or
+                                      book_title_lower in title_lower):
+                continue
+
+            if is_chapter_title(title):
+                chapter_count += 1
+                chapters.append(title)
+
+    return {
+        'has_chapters': chapter_count >= 5,  # At least 5 real chapters
+        'total_entries': total_entries,
+        'chapter_count': chapter_count,
+        'chapters': chapters,
+    }
+
+
+def find_cover_image(extract_dir, opf_path):
+    """Find the cover image path."""
+    opf_dir = os.path.dirname(opf_path)
+
+    tree = ET.parse(opf_path)
+    root = tree.getroot()
+
+    # Method 1: Look for meta cover reference
+    meta_cover = root.find('.//{http://www.idpf.org/2007/opf}meta[@name="cover"]')
+    if meta_cover is not None:
+        cover_id = meta_cover.get('content')
+        manifest = root.find('.//{http://www.idpf.org/2007/opf}manifest')
+        if manifest is not None:
+            for item in manifest.findall('.//{http://www.idpf.org/2007/opf}item'):
+                if item.get('id') == cover_id:
+                    href = item.get('href')
+                    return os.path.normpath(os.path.join(opf_dir, href))
+
+    # Method 2: Look for item with id="cover" or properties="cover-image"
+    manifest = root.find('.//{http://www.idpf.org/2007/opf}manifest')
+    if manifest is not None:
+        for item in manifest.findall('.//{http://www.idpf.org/2007/opf}item'):
+            item_id = item.get('id', '').lower()
+            properties = item.get('properties', '').lower()
+            href = item.get('href', '').lower()
+
+            if 'cover' in item_id or 'cover-image' in properties or 'cover' in href:
+                media_type = item.get('media-type', '')
+                if media_type.startswith('image/'):
+                    href = item.get('href')
+                    return os.path.normpath(os.path.join(opf_dir, href))
+
+    # Method 3: Look for common cover filenames
+    cover_names = ['cover.jpg', 'cover.jpeg', 'cover.png', 'cover.gif', 'Cover.jpg', 'Cover.jpeg']
+    for root_dir, _, files in os.walk(extract_dir):
+        for file in files:
+            if file in cover_names:
+                return os.path.join(root_dir, file)
+
+    return None
+
+
+def downscale_cover(cover_path, max_width=400):
+    """Downscale cover image to specified width."""
+    if not cover_path or not os.path.exists(cover_path):
+        return False
+
+    try:
+        with Image.open(cover_path) as img:
+            if img.width > max_width:
+                ratio = max_width / img.width
+                new_height = int(img.height * ratio)
+
+                resized = img.resize((max_width, new_height), Image.LANCZOS)
+
+                # Preserve format
+                img_format = img.format or 'JPEG'
+                if img_format.upper() == 'JPEG':
+                    resized.save(cover_path, format=img_format, quality=85, optimize=True)
+                else:
+                    resized.save(cover_path, format=img_format, optimize=True)
+
+                print(f"  Cover downscaled from {img.width}x{img.height} to {max_width}x{new_height}")
+                return True
+            else:
+                print(f"  Cover already smaller than {max_width}px ({img.width}x{img.height})")
+                return True
+    except Exception as e:
+        print(f"  Warning: Could not process cover image: {e}")
+        return False
+
+
+def downscale_all_images(extract_dir, max_width=400):
+    """Downscale all images in the EPUB to specified width."""
+    image_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.webp')
+    processed = 0
+    skipped = 0
+
+    for root, _, files in os.walk(extract_dir):
+        for file in files:
+            if file.lower().endswith(image_extensions):
+                image_path = os.path.join(root, file)
+                try:
+                    with Image.open(image_path) as img:
+                        if img.width > max_width:
+                            ratio = max_width / img.width
+                            new_height = int(img.height * ratio)
+
+                            resized = img.resize((max_width, new_height), Image.LANCZOS)
+
+                            img_format = img.format or 'JPEG'
+                            if img_format.upper() == 'JPEG':
+                                resized.save(image_path, format=img_format, quality=85, optimize=True)
+                            else:
+                                resized.save(image_path, format=img_format, optimize=True)
+
+                            processed += 1
+                        else:
+                            skipped += 1
+                except Exception:
+                    continue
+
+    return processed, skipped
+
+
+def check_chapter_separation(ncx_path):
+    """Check if each top-level chapter is in a separate file."""
+    if not ncx_path or not os.path.exists(ncx_path):
+        return {'separated': True, 'issues': [], 'shared_files': {}}
+
+    tree = ET.parse(ncx_path)
+    root = tree.getroot()
+
+    # Extract file references from top-level navPoints
+    file_refs = {}  # file -> first title
+    shared_files = {}  # file -> list of (title, fragment, nav_point)
+    issues = []
+    ns = '{http://www.daisy.org/z3986/2005/ncx/}'
+
+    for nav_point in root.findall(f'.//{ns}navMap/{ns}navPoint'):
+        content = nav_point.find(f'{ns}content')
+        text_elem = nav_point.find(f'.//{ns}text')
+
+        if content is not None:
+            src = content.get('src', '')
+            # Split into file and fragment
+            parts = src.split('#', 1)
+            file_ref = parts[0]
+            fragment = parts[1] if len(parts) > 1 else None
+            title = text_elem.text if text_elem is not None and text_elem.text else 'Unknown'
+
+            if file_ref not in shared_files:
+                shared_files[file_ref] = []
+            shared_files[file_ref].append((title, fragment, nav_point))
+
+            if file_ref in file_refs:
+                issues.append(f"'{title}' shares file with '{file_refs[file_ref]}'")
+            else:
+                file_refs[file_ref] = title
+
+    # Only keep files that are actually shared
+    shared_files = {k: v for k, v in shared_files.items() if len(v) > 1}
+
+    return {
+        'separated': len(issues) == 0,
+        'issues': issues,
+        'shared_files': shared_files,
+    }
+
+
+def fix_chapter_separation(ncx_path, opf_path, extract_dir):
+    """Split shared chapter files into separate files."""
+    if not ncx_path or not os.path.exists(ncx_path):
+        return False
+
+    separation = check_chapter_separation(ncx_path)
+    if separation['separated']:
+        return True  # Nothing to fix
+
+    ncx_dir = os.path.dirname(ncx_path)
+    opf_dir = os.path.dirname(opf_path)
+    ns = '{http://www.daisy.org/z3986/2005/ncx/}'
+
+    # Parse NCX for modification
+    ncx_tree = ET.parse(ncx_path)
+    ncx_root = ncx_tree.getroot()
+
+    # Parse OPF for modification
+    opf_tree = ET.parse(opf_path)
+    opf_root = opf_tree.getroot()
+    opf_ns = '{http://www.idpf.org/2007/opf}'
+    manifest = opf_root.find(f'.//{opf_ns}manifest')
+    spine = opf_root.find(f'.//{opf_ns}spine')
+
+    new_files_created = []
+
+    for file_ref, chapters in separation['shared_files'].items():
+        file_path = os.path.normpath(os.path.join(ncx_dir, file_ref))
+        if not os.path.exists(file_path):
+            print(f"   Warning: Could not find file {file_ref}")
+            continue
+
+        # Read the shared file
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+
+        soup = BeautifulSoup(content, 'xml')
+
+        # Find the body element
+        body = soup.find('body')
+        if not body:
+            print(f"   Warning: No body found in {file_ref}")
+            continue
+
+        # Collect all elements with IDs that match our fragments
+        fragments_to_split = [(title, frag, nav_point) for title, frag, nav_point in chapters if frag]
+
+        if not fragments_to_split:
+            # No fragments, can't split
+            continue
+
+        # Get the original HTML structure (everything before body content)
+        html_tag = soup.find('html')
+        head = soup.find('head')
+
+        # Find all elements that have the fragment IDs
+        split_elements = []
+        for title, frag, nav_point in fragments_to_split:
+            elem = body.find(id=frag)
+            if elem:
+                split_elements.append((title, frag, nav_point, elem))
+
+        if len(split_elements) < 2:
+            # Not enough split points found
+            continue
+
+        # Get file extension and base name
+        file_base, file_ext = os.path.splitext(file_ref)
+
+        # For each chapter, extract content from its ID to the next ID (or end)
+        for i, (title, frag, nav_point, start_elem) in enumerate(split_elements):
+            # Create new filename
+            new_filename = f"{file_base}_ch{i+1}{file_ext}"
+            new_file_path = os.path.normpath(os.path.join(ncx_dir, new_filename))
+
+            # Clone the soup structure
+            new_soup = BeautifulSoup(str(soup), 'xml')
+            new_body = new_soup.find('body')
+
+            # Clear the body
+            for child in list(new_body.children):
+                child.extract()
+
+            # Determine which elements belong to this chapter
+            # Collect all siblings from start_elem until next chapter's start element
+            current = start_elem
+            chapter_elements = []
+
+            # Include the start element itself
+            chapter_elements.append(current)
+
+            # Get next chapter's start element (if any)
+            next_start = None
+            if i + 1 < len(split_elements):
+                next_start = split_elements[i + 1][3]
+
+            # Collect siblings until we hit the next chapter or end
+            for sibling in current.find_next_siblings():
+                if next_start and sibling == next_start:
+                    break
+                # Also check if sibling contains the next start element
+                if next_start and sibling.find(id=split_elements[i + 1][1]):
+                    break
+                chapter_elements.append(sibling)
+
+            # Add elements to new body
+            for elem in chapter_elements:
+                new_body.append(BeautifulSoup(str(elem), 'xml').contents[0])
+
+            # Write the new file
+            with open(new_file_path, 'w', encoding='utf-8') as f:
+                f.write(str(new_soup))
+
+            new_files_created.append(new_filename)
+            print(f"   Created: {new_filename} for '{title}'")
+
+            # Update NCX navPoint to reference new file
+            content_elem = nav_point.find(f'{ns}content')
+            if content_elem is not None:
+                content_elem.set('src', new_filename)
+
+            # Add to OPF manifest
+            if manifest is not None:
+                item_id = f"chapter_{file_base}_ch{i+1}"
+                new_item = ET.SubElement(manifest, f'{opf_ns}item')
+                new_item.set('id', item_id)
+                new_item.set('href', new_filename)
+                new_item.set('media-type', 'application/xhtml+xml')
+
+                # Add to spine
+                if spine is not None:
+                    itemref = ET.SubElement(spine, f'{opf_ns}itemref')
+                    itemref.set('idref', item_id)
+
+    # Save modified NCX
+    if new_files_created:
+        # Register namespace to avoid ns0 prefix
+        ET.register_namespace('', 'http://www.daisy.org/z3986/2005/ncx/')
+        ncx_tree.write(ncx_path, encoding='utf-8', xml_declaration=True)
+
+        # Save modified OPF
+        ET.register_namespace('', 'http://www.idpf.org/2007/opf')
+        ET.register_namespace('dc', 'http://purl.org/dc/elements/1.1/')
+        opf_tree.write(opf_path, encoding='utf-8', xml_declaration=True)
+
+        return True
+
+    return False
+
+
+def generate_output_filename(metadata, input_path):
+    """Generate output filename based on metadata."""
+    title = metadata.get('title', '')
+    author = format_author_name(metadata.get('author', ''))
+
+    if not title:
+        # Use input filename without extension
+        title = Path(input_path).stem
+
+    # If title contains "-", use only the first part
+    if '-' in title:
+        title = title.split('-')[0].strip()
+
+    if author:
+        filename = f"{title} - {author}"
+    else:
+        filename = title
+
+    filename = sanitize_filename(filename)
+
+    return filename + '.epub'
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: microbook <epub_path>")
+        sys.exit(1)
+
+    input_path = sys.argv[1]
+
+    if not os.path.exists(input_path):
+        print(f"Error: File not found: {input_path}")
+        sys.exit(1)
+
+    if not input_path.lower().endswith('.epub'):
+        print("Error: Input file must be an EPUB file")
+        sys.exit(1)
+
+    print(f"Processing: {input_path}")
+
+    # Create temporary directory for extraction
+    with tempfile.TemporaryDirectory() as temp_dir:
+        extract_dir = os.path.join(temp_dir, 'epub')
+        os.makedirs(extract_dir)
+
+        # Extract EPUB
+        print("\n1. Extracting EPUB...")
+        extract_epub(input_path, extract_dir)
+
+        # Find OPF file
+        opf_rel_path = find_opf_path(extract_dir)
+        if not opf_rel_path:
+            print("Error: Could not find OPF file")
+            sys.exit(1)
+
+        opf_path = os.path.join(extract_dir, opf_rel_path)
+        print(f"   Found OPF: {opf_rel_path}")
+
+        # Get metadata
+        metadata = get_book_metadata(opf_path)
+        print(f"   Title: {metadata['title']}")
+        print(f"   Author: {metadata['author']}")
+        print(f"   Language: {metadata['language']}")
+
+        # Process content files (remove <a> and <span> tags)
+        print("\n2. Removing <a> and <span> tags from content...")
+        process_content_files(extract_dir)
+
+        # Analyze TOC
+        print("\n3. Analyzing table of contents...")
+        ncx_path = find_toc_ncx(extract_dir, opf_path)
+        toc_needs_fix = False
+
+        if ncx_path:
+            print(f"   Found NCX: {os.path.relpath(ncx_path, extract_dir)}")
+            toc_analysis = analyze_toc(ncx_path, metadata['title'])
+            print(f"   Total entries: {toc_analysis['total_entries']}")
+            print(f"   Chapter entries: {toc_analysis['chapter_count']}")
+
+            if toc_analysis['has_chapters']:
+                print("   ✓ TOC has proper chapter entries")
+            else:
+                print("   ⚠ TOC has no proper chapter entries")
+                toc_needs_fix = True
+        else:
+            print("   No toc.ncx found")
+            toc_needs_fix = True
+
+        if toc_needs_fix:
+            print("   Detecting chapters and rebuilding TOC...")
+            if fix_toc(ncx_path, opf_path, extract_dir):
+                print("   ✓ TOC has been rebuilt")
+                # Update ncx_path if it was created
+                if not ncx_path:
+                    ncx_path = find_toc_ncx(extract_dir, opf_path)
+            else:
+                print("   ⚠ Could not automatically rebuild TOC")
+
+        # Check and fix chapter separation
+        print("\n4. Checking chapter file separation...")
+        separation = check_chapter_separation(ncx_path)
+        if separation['separated']:
+            print("   ✓ Each top-level chapter is in a separate file")
+        else:
+            print("   ⚠ Some chapters share files:")
+            for issue in separation['issues'][:5]:
+                print(f"     - {issue}")
+            print("   Splitting shared files...")
+            if fix_chapter_separation(ncx_path, opf_path, extract_dir):
+                print("   ✓ Chapter files have been separated")
+            else:
+                print("   ⚠ Could not automatically separate chapter files")
+
+        # Downscale cover
+        print("\n5. Processing cover image...")
+        cover_path = find_cover_image(extract_dir, opf_path)
+        if cover_path:
+            print(f"   Found cover: {os.path.relpath(cover_path, extract_dir)}")
+            downscale_cover(cover_path, max_width=400)
+        else:
+            print("   No cover image found")
+
+        print("\n6. Downscaling illustrations...")
+        processed, skipped = downscale_all_images(extract_dir, max_width=400)
+        if processed > 0:
+            print(f"   ✓ Downscaled {processed} images to 400px width")
+        if skipped > 0:
+            print(f"   Skipped {skipped} images (already ≤400px)")
+
+        # Generate output filename
+        output_filename = generate_output_filename(metadata, input_path)
+        output_dir = os.path.dirname(os.path.abspath(input_path))
+        output_path = os.path.join(output_dir, output_filename)
+
+        # Avoid overwriting input file
+        if os.path.abspath(output_path) == os.path.abspath(input_path):
+            output_path = os.path.join(output_dir, f"processed_{output_filename}")
+
+        # Create output EPUB
+        print(f"\n7. Creating output EPUB...")
+        create_epub(extract_dir, output_path)
+        print(f"   Output: {output_path}")
+
+        print("\n✓ Processing complete!")
+
+
+if __name__ == '__main__':
+    main()
