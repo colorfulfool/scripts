@@ -1,4 +1,26 @@
 #!/usr/bin/env bash
+
+set_asvla_issue_status() {
+  project_id="PVT_kwDOBWpGXc4ASp5k"         # Asvla/bugs-and-requests
+  field_id="PVTSSF_lADOBWpGXc4ASp5kzgL6fWw" # Status
+  issue_id=$1
+  status=$2
+
+  case $status in
+    "QM Ready")
+      single_select_option_id="afb464af"
+      ;;
+    Live)
+      single_select_option_id="3e734099"
+      ;;
+    *)
+      echo "Unknown status $status"
+      ;;
+  esac
+
+  gh project item-edit --project-id $project_id --id $issue_id --field-id $field_id --single-select-option-id $single_select_option_id
+}
+
 case $1 in
   dev)
     test-with-file .git/HEAD bin/tools/dev/bun-install-run-dev.sh 3000
@@ -25,6 +47,17 @@ case $1 in
     export CLOUDFLARE_API_TOKEN=KhakxtNSS0pGs12R8SFN5xCgZ_Q5mmPoZSXcZrk5
     ./bin/build/scripts/sync-capawesome-env.sh stg
     ./bin/build/scripts/sync-capawesome-env.sh prod
+    ;;
+  fixer)
+    echo "# Fixer? I barely know 'er!"
+    claude "Fix issue $2 in a separate branch and create a PR. The issue is in Asvla/bugs-and-requests repo, but fix here."
+    ;;
+  qm|greenlight)
+    branch_issue_id=$(git branch --show-current | sed -n 's|^.*/\([0-9]*\)-.*|\1|p')
+    issue_id="${branch_issue_id:-$2}"
+    [[ -z $issue_id ]] && { echo "Issue number missing" >&2; exit 1; }
+    gh issue comment $issue_id --repo Asvla/bugs-and-requests --body "@davemakara Test on `cf-url`"
+    set_asvla_issue_status $issue_id "QM Ready"
     ;;
   *)
     echo "Supported commands: dev, story[book], build, [type]check, device, vars"
