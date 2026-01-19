@@ -6,6 +6,7 @@ Usage: microbook <epub_path>
 
 Features:
 - Removes <a> and <span> tags from content
+- Removes embedded fonts (font files and @font-face CSS rules)
 - Ensures toc.ncx specifies actual chapters
 - Ensures each top-level chapter is in a separate file
 - Downscales cover image to 400px width
@@ -201,10 +202,14 @@ def format_author_name(author):
 
 def sanitize_filename(name):
     """Remove invalid characters from filename."""
-    # Replace invalid characters with underscore
+    # Replace invalid characters with space
     invalid_chars = '<>:"/\\|?*'
     for char in invalid_chars:
-        name = name.replace(char, '_')
+        name = name.replace(char, ' ')
+    # Replace underscores with spaces
+    name = name.replace('_', ' ')
+    # Collapse multiple spaces into one
+    name = re.sub(r'\s+', ' ', name)
     # Remove leading/trailing whitespace and dots
     name = name.strip(' .')
     return name
@@ -240,6 +245,71 @@ def process_content_files(extract_dir):
                     f.write(modified_content)
 
                 print(f"  Processed: {os.path.relpath(file_path, extract_dir)}")
+
+
+def remove_embedded_fonts(extract_dir, opf_path):
+    """Remove embedded fonts from EPUB (font files and @font-face CSS rules)."""
+    font_extensions = ('.ttf', '.otf', '.woff', '.woff2', '.eot')
+    removed_fonts = []
+
+    # Find and delete font files
+    for root, _, files in os.walk(extract_dir):
+        for file in files:
+            if file.lower().endswith(font_extensions):
+                font_path = os.path.join(root, file)
+                os.remove(font_path)
+                removed_fonts.append(os.path.relpath(font_path, extract_dir))
+
+    # Remove font references from OPF manifest
+    tree = ET.parse(opf_path)
+    opf_root = tree.getroot()
+    opf_ns = '{http://www.idpf.org/2007/opf}'
+
+    manifest = opf_root.find(f'.//{opf_ns}manifest')
+    if manifest is not None:
+        items_to_remove = []
+        for item in manifest.findall(f'{opf_ns}item'):
+            href = item.get('href', '').lower()
+            media_type = item.get('media-type', '').lower()
+            if (href.endswith(font_extensions) or
+                'font' in media_type or
+                media_type in ('application/x-font-ttf', 'application/x-font-opentype',
+                              'application/font-woff', 'application/font-woff2',
+                              'font/ttf', 'font/otf', 'font/woff', 'font/woff2')):
+                items_to_remove.append(item)
+
+        for item in items_to_remove:
+            manifest.remove(item)
+
+        if items_to_remove:
+            ET.register_namespace('', 'http://www.idpf.org/2007/opf')
+            ET.register_namespace('dc', 'http://purl.org/dc/elements/1.1/')
+            tree.write(opf_path, encoding='utf-8', xml_declaration=True)
+
+    # Remove @font-face rules from CSS files
+    css_processed = 0
+    for root, _, files in os.walk(extract_dir):
+        for file in files:
+            if file.lower().endswith('.css'):
+                css_path = os.path.join(root, file)
+                with open(css_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+
+                # Remove @font-face blocks
+                original_content = content
+                content = re.sub(
+                    r'@font-face\s*\{[^}]*\}',
+                    '',
+                    content,
+                    flags=re.IGNORECASE | re.DOTALL
+                )
+
+                if content != original_content:
+                    with open(css_path, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    css_processed += 1
+
+    return removed_fonts, css_processed
 
 
 def find_toc_ncx(extract_dir, opf_path):
@@ -1029,8 +1099,22 @@ def main():
         print("\n2. Removing <a> and <span> tags from content...")
         process_content_files(extract_dir)
 
+        # Remove embedded fonts
+        print("\n3. Removing embedded fonts...")
+        removed_fonts, css_processed = remove_embedded_fonts(extract_dir, opf_path)
+        if removed_fonts:
+            print(f"   Removed {len(removed_fonts)} font file(s)")
+            for font in removed_fonts[:5]:
+                print(f"     - {font}")
+            if len(removed_fonts) > 5:
+                print(f"     ... and {len(removed_fonts) - 5} more")
+        else:
+            print("   No font files found")
+        if css_processed:
+            print(f"   Cleaned @font-face rules from {css_processed} CSS file(s)")
+
         # Analyze TOC
-        print("\n3. Analyzing table of contents...")
+        print("\n4. Analyzing table of contents...")
         ncx_path = find_toc_ncx(extract_dir, opf_path)
         toc_needs_fix = False
 
@@ -1060,7 +1144,7 @@ def main():
                 print("   ⚠ Could not automatically rebuild TOC")
 
         # Check and fix chapter separation
-        print("\n4. Checking chapter file separation...")
+        print("\n5. Checking chapter file separation...")
         separation = check_chapter_separation(ncx_path)
         if separation['separated']:
             print("   ✓ Each top-level chapter is in a separate file")
@@ -1075,7 +1159,7 @@ def main():
                 print("   ⚠ Could not automatically separate chapter files")
 
         # Downscale cover
-        print("\n5. Processing cover image...")
+        print("\n6. Processing cover image...")
         cover_path = find_cover_image(extract_dir, opf_path)
         if cover_path:
             print(f"   Found cover: {os.path.relpath(cover_path, extract_dir)}")
@@ -1083,7 +1167,7 @@ def main():
         else:
             print("   No cover image found")
 
-        print("\n6. Downscaling illustrations...")
+        print("\n7. Downscaling illustrations...")
         processed, skipped = downscale_all_images(extract_dir, max_width=400)
         if processed > 0:
             print(f"   ✓ Downscaled {processed} images to 400px width")
@@ -1100,7 +1184,7 @@ def main():
             output_path = os.path.join(output_dir, f"processed_{output_filename}")
 
         # Create output EPUB
-        print(f"\n7. Creating output EPUB...")
+        print(f"\n8. Creating output EPUB...")
         create_epub(extract_dir, output_path)
         print(f"   Output: {output_path}")
 
