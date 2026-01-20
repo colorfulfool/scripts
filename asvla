@@ -31,11 +31,29 @@ fetch_issue_type() {
   esac
 }
 
+fetch_project_item_id() {
+  local issue_number=$1
+  gh api graphql -f query='
+    query($owner: String!, $repo: String!, $number: Int!) {
+      repository(owner: $owner, name: $repo) {
+        issue(number: $number) {
+          projectItems(first: 1) {
+            nodes { id }
+          }
+        }
+      }
+    }' -f owner=Asvla -f repo=bugs-and-requests -F number="$issue_number" \
+    --jq '.data.repository.issue.projectItems.nodes[0].id'
+}
+
 set_asvla_issue_status() {
   project_id="PVT_kwDOBWpGXc4ASp5k"         # Asvla/bugs-and-requests
   field_id="PVTSSF_lADOBWpGXc4ASp5kzgL6fWw" # Status
-  issue_id=$1
+  issue_number=$1
   status=$2
+
+  item_id=$(fetch_project_item_id "$issue_number")
+  [[ -z $item_id ]] && { echo "Could not find project item for issue #$issue_number" >&2; return 1; }
 
   case $status in
     "In Progress")
@@ -48,11 +66,12 @@ set_asvla_issue_status() {
       single_select_option_id="3e734099"
       ;;
     *)
-      echo "Unknown status $status"
+      echo "Unknown status $status" >&2
+      return 1
       ;;
   esac
 
-  gh project item-edit --project-id $project_id --id $issue_id --field-id $field_id --single-select-option-id $single_select_option_id
+  gh project item-edit --project-id $project_id --id $item_id --field-id $field_id --single-select-option-id $single_select_option_id
 }
 
 case $1 in
