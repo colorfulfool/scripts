@@ -74,6 +74,39 @@ set_asvla_issue_status() {
   gh project item-edit --project-id $project_id --id $item_id --field-id $field_id --single-select-option-id $single_select_option_id
 }
 
+function start_command() {
+  branch_title=$2
+  issue_id=$(echo $branch_title | sed -En 's|([0-9]+)-.*|\1|p')
+  if [[ -n $issue_id ]]; then
+    branch_name="$(fetch_issue_type $issue_id)/$branch_title"
+    set_asvla_issue_status $issue_id "In Progress"
+  else
+    branch_name="$(gum choose feature fix chore)/$branch_title"
+  fi
+  git checkout -b $branch_name
+}
+
+function pr_command() {
+  branch_name=$(git branch --show-current)
+  suggested_title="$(humanize "$branch_name")"
+  pr_title=$(gum input --value "$suggested_title" --placeholder "PR title")
+  git push -u origin "$branch_name" --quiet
+  gh pr create --title "$pr_title" --body "" --base main --head "$branch_name"
+}
+
+function qm_command() {
+  if ! gh pr view --json url &>/dev/null; then
+    pr_command
+  fi
+
+  branch_issue_id=$(git branch --show-current | sed -n 's|^.*/\([0-9]*\)-.*|\1|p')
+  issue_id="${branch_issue_id:-$2}"
+  [[ -z $issue_id ]] && { echo "Issue number missing" >&2; exit 1; }
+
+  gh issue comment $issue_id --repo Asvla/bugs-and-requests --body "@davemakara Test on `cf-url`"
+  set_asvla_issue_status $issue_id "QM Ready"
+}
+
 case $1 in
   dev)
     test-with-file .git/HEAD bin/tools/dev/bun-install-run-dev.sh 3000
@@ -106,28 +139,13 @@ case $1 in
     claude "Fix issue $2 in a separate branch and create a PR. The issue is in Asvla/bugs-and-requests repo, but fix here."
     ;;
   start)
-    branch_title=$2
-    issue_id=$(echo $branch_title | sed -En 's|([0-9]+)-.*|\1|p')
-    if [[ -n $issue_id ]]; then
-      branch_name="$(fetch_issue_type $issue_id)/$branch_title"
-      set_asvla_issue_status $issue_id "In Progress"
-    else
-      branch_name="$(gum choose feature fix chore)/$branch_title"
-    fi
-    git checkout -b $branch_name
+    start_command "$@"    
     ;;
   pr)
-    suggested_title="$(humanize `git branch --show-current`)"
-    pr_title=$(gum input --value "$suggested_title" --placeholder "PR title")
-    git push -u origin "$branch_name" --quiet
-    gh pr create --title "$pr_title" --body "" --base main --head "$branch_name"
+    pr_command "$@"
     ;;
   qm|greenlight)
-    branch_issue_id=$(git branch --show-current | sed -n 's|^.*/\([0-9]*\)-.*|\1|p')
-    issue_id="${branch_issue_id:-$2}"
-    [[ -z $issue_id ]] && { echo "Issue number missing" >&2; exit 1; }
-    gh issue comment $issue_id --repo Asvla/bugs-and-requests --body "@davemakara Test on `cf-url`"
-    set_asvla_issue_status $issue_id "QM Ready"
+    qm_command "$@"
     ;;
   *)
     echo "Supported commands: dev, story[book], build, [type]check, device, vars, start, greenlight"
