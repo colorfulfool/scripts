@@ -115,10 +115,12 @@ case $1 in
       branch_name="$(gum choose feature fix chore)/$branch_title"
     fi
     git checkout -b $branch_name
-    suggested_title="$(humanize $branch_title)"
+    ;;
+  pr)
+    suggested_title="$(humanize `git branch --show-current`)"
     pr_title=$(gum input --value "$suggested_title" --placeholder "PR title")
     git push -u origin "$branch_name" --quiet
-    gh pr create --title "$pr_title" --body "" --base main --head "$branch_name" 2>/dev/null
+    gh pr create --title "$pr_title" --body "" --base main --head "$branch_name"
     ;;
   qm|greenlight)
     branch_issue_id=$(git branch --show-current | sed -n 's|^.*/\([0-9]*\)-.*|\1|p')
