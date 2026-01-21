@@ -102,6 +102,22 @@ function pr_command() {
   gh pr create --title "$pr_title" --body "$pr_body" --base main --head "$branch_name"
 }
 
+function comment_command() {
+  # Check if first arg is a number (issue id) or the comment text
+  if [[ $2 =~ ^[0-9]+$ ]]; then
+    issue_id=$2
+    comment_text=$3
+  else
+    issue_id=$(git branch --show-current | sed -n 's|^.*/\([0-9]*\)-.*|\1|p')
+    comment_text=$2
+  fi
+
+  [[ -z $issue_id ]] && { echo "Issue ID not provided and could not be extracted from branch name" >&2; exit 1; }
+  [[ -z $comment_text ]] && { echo "Comment text required" >&2; exit 1; }
+
+  gh issue comment "$issue_id" --repo Asvla/bugs-and-requests --body "$comment_text"
+}
+
 function qm_command() {
   if ! gh pr view --json url &>/dev/null; then
     pr_command
@@ -111,7 +127,7 @@ function qm_command() {
   issue_id="${branch_issue_id:-$2}"
   [[ -z $issue_id ]] && { echo "Issue number missing" >&2; exit 1; }
 
-  gh issue comment $issue_id --repo Asvla/bugs-and-requests --body "@davemakara Test on `cf-url`"
+  gh issue comment "$issue_id" --repo Asvla/bugs-and-requests --body "@davemakara Test on `cf-url`"
   set_asvla_issue_status $issue_id "QM Ready"
 }
 
@@ -155,7 +171,10 @@ case $1 in
   qm|greenlight)
     qm_command "$@"
     ;;
+  comment)
+    comment_command "$@"
+    ;;
   *)
-    echo "Supported commands: dev, story[book], build, [type]check, device, vars, start, greenlight"
+    echo "Supported commands: dev, story[book], build, [type]check, device, vars, start, greenlight, comment"
     ;;
 esac
