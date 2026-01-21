@@ -88,10 +88,18 @@ function start_command() {
 
 function pr_command() {
   branch_name=$(git branch --show-current)
+  branch_issue_id=$(echo "$branch_name" | sed -n 's|^.*/\([0-9]*\)-.*|\1|p')
+
+  if [[ -n $branch_issue_id ]]; then
+    pr_body="Related to Asvla/bugs-and-requests#$branch_issue_id"
+  else
+    pr_body=""
+  fi
+
   suggested_title="$(humanize "$branch_name")"
   pr_title=$(gum input --value "$suggested_title" --placeholder "PR title")
   git push -u origin "$branch_name" --quiet
-  gh pr create --title "$pr_title" --body "" --base main --head "$branch_name"
+  gh pr create --title "$pr_title" --body "$pr_body" --base main --head "$branch_name"
 }
 
 function qm_command() {
