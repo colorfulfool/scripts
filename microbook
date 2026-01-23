@@ -5,7 +5,8 @@ microbook - Process EPUB files for optimal reading experience
 Usage: microbook <epub_path>
 
 Features:
-- Removes <a> and <span> tags from content
+- Removes <a> and <span> tags from content (preserves text)
+- Removes <sup> tags from content (removes text)
 - Removes embedded fonts (font files and @font-face CSS rules)
 - Ensures toc.ncx specifies actual chapters
 - Ensures each top-level chapter is in a separate file
@@ -215,14 +216,25 @@ def sanitize_filename(name):
     return name
 
 
-def remove_tags_from_html(content, tags_to_remove):
-    """Remove specified tags from HTML/XHTML while preserving their content."""
+def remove_tags_from_html(content, tags_to_unwrap, tags_to_decompose=None):
+    """Remove specified tags from HTML/XHTML.
+
+    tags_to_unwrap: tags to remove while preserving their content
+    tags_to_decompose: tags to remove along with their contents
+    """
     # Use xml parser for XHTML content
     soup = BeautifulSoup(content, 'xml')
 
-    for tag_name in tags_to_remove:
+    # Remove tags but keep their content
+    for tag_name in tags_to_unwrap:
         for tag in soup.find_all(tag_name):
             tag.unwrap()
+
+    # Remove tags along with their contents
+    if tags_to_decompose:
+        for tag_name in tags_to_decompose:
+            for tag in soup.find_all(tag_name):
+                tag.decompose()
 
     return str(soup)
 
@@ -238,8 +250,8 @@ def process_content_files(extract_dir):
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
 
-                # Remove <a> and <span> tags
-                modified_content = remove_tags_from_html(content, ['a', 'span'])
+                # Remove <a> and <span> tags (keep content), remove <sup> tags with content
+                modified_content = remove_tags_from_html(content, ['a', 'span'], ['sup'])
 
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(modified_content)
@@ -1095,8 +1107,8 @@ def main():
         print(f"   Author: {metadata['author']}")
         print(f"   Language: {metadata['language']}")
 
-        # Process content files (remove <a> and <span> tags)
-        print("\n2. Removing <a> and <span> tags from content...")
+        # Process content files (remove unwanted tags)
+        print("\n2. Removing <a>, <span>, and <sup> tags from content...")
         process_content_files(extract_dir)
 
         # Remove embedded fonts
@@ -1179,9 +1191,6 @@ def main():
         output_dir = os.path.dirname(os.path.abspath(input_path))
         output_path = os.path.join(output_dir, output_filename)
 
-        # Avoid overwriting input file
-        if os.path.abspath(output_path) == os.path.abspath(input_path):
-            output_path = os.path.join(output_dir, f"processed_{output_filename}")
 
         # Create output EPUB
         print(f"\n8. Creating output EPUB...")
