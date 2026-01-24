@@ -11,6 +11,7 @@ Features:
 - Ensures toc.ncx specifies actual chapters
 - Ensures each top-level chapter is in a separate file
 - Downscales cover image to 400px width
+- Removes all other illustrations
 - Names output file based on book metadata and language
 """
 
@@ -282,8 +283,6 @@ def process_content_files(extract_dir):
 
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(modified_content)
-
-                print(f"  Processed: {os.path.relpath(file_path, extract_dir)}")
 
 
 def remove_embedded_fonts(extract_dir, opf_path):
@@ -874,37 +873,28 @@ def downscale_cover(cover_path, max_width=400):
         return False
 
 
-def downscale_all_images(extract_dir, max_width=400):
-    """Downscale all images in the EPUB to specified width."""
+def remove_illustrations(extract_dir, cover_path=None):
+    """Remove all images in the EPUB except the cover."""
     image_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.webp')
-    processed = 0
-    skipped = 0
+    removed = 0
+
+    # Normalize cover path for comparison
+    cover_normalized = os.path.normpath(cover_path) if cover_path else None
 
     for root, _, files in os.walk(extract_dir):
         for file in files:
             if file.lower().endswith(image_extensions):
                 image_path = os.path.join(root, file)
+                # Skip cover image
+                if cover_normalized and os.path.normpath(image_path) == cover_normalized:
+                    continue
                 try:
-                    with Image.open(image_path) as img:
-                        if img.width > max_width:
-                            ratio = max_width / img.width
-                            new_height = int(img.height * ratio)
-
-                            resized = img.resize((max_width, new_height), Image.LANCZOS)
-
-                            img_format = img.format or 'JPEG'
-                            if img_format.upper() == 'JPEG':
-                                resized.save(image_path, format=img_format, quality=85, optimize=True)
-                            else:
-                                resized.save(image_path, format=img_format, optimize=True)
-
-                            processed += 1
-                        else:
-                            skipped += 1
+                    os.remove(image_path)
+                    removed += 1
                 except Exception:
                     continue
 
-    return processed, skipped
+    return removed
 
 
 def check_chapter_separation(ncx_path):
@@ -1238,12 +1228,12 @@ def main():
         else:
             print("   No cover image found")
 
-        print("\n7. Downscaling illustrations...")
-        processed, skipped = downscale_all_images(extract_dir, max_width=400)
-        if processed > 0:
-            print(f"   ✓ Downscaled {processed} images to 400px width")
-        if skipped > 0:
-            print(f"   Skipped {skipped} images (already ≤400px)")
+        print("\n7. Removing illustrations...")
+        removed = remove_illustrations(extract_dir, cover_path)
+        if removed > 0:
+            print(f"   ✓ Removed {removed} illustration(s)")
+        else:
+            print("   No illustrations found")
 
         # Generate output filename
         output_filename = generate_output_filename(metadata, input_path)
