@@ -239,6 +239,27 @@ def remove_tags_from_html(content, tags_to_unwrap, tags_to_decompose=None):
     return str(soup)
 
 
+def clean_divs_in_html(content):
+    """Remove empty/nbsp divs and convert top-level divs to p tags."""
+    soup = BeautifulSoup(content, 'xml')
+
+    # Remove div elements that contain only nbsp or whitespace
+    for div in soup.find_all('div'):
+        # Get text content, treating nbsp as regular space
+        text = div.get_text()
+        # Check if it's empty or contains only whitespace/nbsp
+        if text.replace('\xa0', '').strip() == '':
+            div.decompose()
+
+    # Convert top-level divs in body to p tags
+    body = soup.find('body')
+    if body:
+        for div in body.find_all('div', recursive=False):
+            div.name = 'p'
+
+    return str(soup)
+
+
 def process_content_files(extract_dir):
     """Process all content files to remove <a> and <span> tags."""
     # Find all HTML/XHTML files
@@ -252,6 +273,9 @@ def process_content_files(extract_dir):
 
                 # Remove <a> and <span> tags (keep content), remove <sup> tags with content
                 modified_content = remove_tags_from_html(content, ['a', 'span'], ['sup'])
+
+                # Remove empty/nbsp divs and convert top-level divs to p tags
+                modified_content = clean_divs_in_html(modified_content)
 
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(modified_content)
