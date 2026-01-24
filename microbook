@@ -65,14 +65,17 @@ CHAPTER_TEXT_PATTERNS = [
     # English
     (r'^Chapter\s+(\d+|[IVXLCDM]+)\.?\s*(.*)$', 0.95),
     (r'^Part\s+(\d+|[IVXLCDM]+)\.?\s*(.*)$', 0.9),
+    (r'^Book\s+the\s+(First|Second|Third|Fourth|Fifth|Sixth|Seventh|Eighth|Ninth|Tenth)[\s—–-]*(.*)$', 0.9),  # "Book the First—Title"
     (r'^Section\s+(\d+)\.?\s*(.*)$', 0.85),
     (r'^(\d+)\.\s+(.+)$', 0.8),  # "1. Title"
     (r'^(\d+)\s+([A-ZА-Я].+)$', 0.75),  # "1 Title" (capital letter after)
-    (r'^([IVXLCDM]+)\.\s*(.*)$', 0.85),  # Roman numerals
+    (r'^([IVXLCDM]+)\.\s*(.*)$', 0.85),  # Roman numerals with period
+    (r'^([IVXLCDM]+)\s+([A-Z].+)$', 0.8),  # Roman numerals without period: "I The Period"
     # Russian
     (r'^Глава\s+(\d+|[IVXLCDM]+)\.?\s*(.*)$', 0.95),
     (r'^Часть\s+(\d+|[IVXLCDM]+)\.?\s*(.*)$', 0.9),
     (r'^Раздел\s+(\d+)\.?\s*(.*)$', 0.85),
+    (r'^Книга\s+(первая|вторая|третья|четвёртая|пятая|шестая)[\s—–-]*(.*)$', 0.9),  # Russian "Book the First"
 ]
 
 # CSS class patterns that indicate chapters
@@ -413,7 +416,7 @@ def match_heading_chapters(soup, file_path):
 
     for tag_name in ['h1', 'h2', 'h3']:
         for i, heading in enumerate(soup.find_all(tag_name)):
-            text = heading.get_text(strip=True)
+            text = get_element_text(heading)
             if not text or len(text) < 2 or len(text) > 200:
                 continue
 
@@ -446,7 +449,7 @@ def match_class_based_chapters(soup, file_path):
         for cls in classes:
             for pattern in CHAPTER_CLASS_PATTERNS:
                 if re.search(pattern, cls, re.IGNORECASE):
-                    text = element.get_text(strip=True)
+                    text = get_element_text(element)
                     if text and 2 < len(text) < 200 and is_chapter_title(text):
                         candidates.append(ChapterCandidate(
                             file_path=file_path,
@@ -467,7 +470,7 @@ def match_text_pattern_chapters(soup, file_path):
     search_tags = ['h1', 'h2', 'h3', 'h4', 'p', 'div']
 
     for tag in soup.find_all(search_tags):
-        text = tag.get_text(strip=True)
+        text = get_element_text(tag)
         if not text or len(text) > 200:
             continue
 
@@ -497,7 +500,7 @@ def match_standalone_title_paragraphs(soup, file_path):
     paragraphs = soup.find_all('p')
 
     for i, p in enumerate(paragraphs):
-        text = p.get_text(strip=True)
+        text = get_element_text(p)
 
         # Title-like: 5-80 chars, doesn't end with sentence punctuation
         if not text or len(text) < 5 or len(text) > 80:
@@ -517,7 +520,7 @@ def match_standalone_title_paragraphs(soup, file_path):
 
         # Check if next paragraph is longer (actual content)
         if i + 1 < len(paragraphs):
-            next_text = paragraphs[i + 1].get_text(strip=True)
+            next_text = get_element_text(paragraphs[i + 1])
             if len(next_text) < len(text) * 2:
                 continue  # Next paragraph should be much longer
 
@@ -534,6 +537,34 @@ def match_standalone_title_paragraphs(soup, file_path):
     return candidates
 
 
+def is_toc_file(soup):
+    """Check if a file appears to be a Table of Contents page."""
+    # Check for "Contents" or "Table of Contents" heading
+    for tag in soup.find_all(['h1', 'h2', 'h3', 'div', 'p']):
+        text = get_element_text(tag).lower().strip()
+        if text in ('contents', 'table of contents', 'toc', 'оглавление', 'содержание'):
+            return True
+
+    # Count how many links are in the file - TOC pages typically have many links
+    links = soup.find_all('a')
+    if len(links) > 15:
+        # Check if links point to other files (not just anchors)
+        external_links = sum(1 for a in links if a.get('href', '').endswith(('.xhtml', '.html', '.htm')))
+        if external_links > 10:
+            return True
+
+    return False
+
+
+def get_element_text(element):
+    """Get text from element, replacing <br> tags with spaces."""
+    # Use separator to insert space between text nodes (handles <br> implicitly)
+    text = element.get_text(separator=' ')
+    # Collapse multiple spaces into one and strip
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
 def detect_chapters_in_file(file_path, base_path):
     """Detect all chapter candidates in a single content file."""
     with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -541,6 +572,10 @@ def detect_chapters_in_file(file_path, base_path):
 
     soup = BeautifulSoup(content, 'xml')
     rel_path = os.path.relpath(file_path, base_path)
+
+    # Skip TOC/Contents files
+    if is_toc_file(soup):
+        return []
 
     candidates = []
     candidates.extend(match_heading_chapters(soup, rel_path))
