@@ -2,6 +2,7 @@
 
 PID=`pidof better-control`
 if [ -n "$PID" ]; then
+  echo "$1" > /tmp/better-control/tab.txt
   kill -SIGUSR1 $PID
 else
   better-control $1
