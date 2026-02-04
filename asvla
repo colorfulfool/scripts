@@ -108,11 +108,21 @@ function comment_command() {
     issue_id=$2
     comment_text=$3
   else
+    # Try to extract from branch name first
     issue_id=$(git branch --show-current | sed -n 's|^.*/\([0-9]*\)-.*|\1|p')
+    
+    # If not found in branch name, try to extract from PR description
+    if [[ -z $issue_id ]]; then
+      pr_body=$(gh pr view --json body --jq '.body' 2>/dev/null)
+      if [[ -n $pr_body ]]; then
+        issue_id=$(echo "$pr_body" | sed -n 's|.*bugs-and-requests#\([0-9]*\).*|\1|p')
+      fi
+    fi
+    
     comment_text=$2
   fi
 
-  [[ -z $issue_id ]] && { echo "Issue ID not provided and could not be extracted from branch name" >&2; exit 1; }
+  [[ -z $issue_id ]] && { echo "Issue ID not provided and could not be extracted from branch name or PR description" >&2; exit 1; }
   [[ -z $comment_text ]] && { echo "Comment text required" >&2; exit 1; }
 
   gh issue comment "$issue_id" --repo Asvla/bugs-and-requests --body "$comment_text"
