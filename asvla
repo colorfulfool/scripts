@@ -159,8 +159,12 @@ case $1 in
     ./bin/build/scripts/sync-capawesome-env.sh prod
     ;;
   fixer)
-    echo "# Fixer? I barely know 'er!"
-    claude "Fix issue $2 in a separate branch and create a PR. The issue is in Asvla/bugs-and-requests repo, but fix here."
+    claude << END
+      Fix issue $2 in a separate branch and create a PR.
+      The issue is in Asvla/bugs-and-requests repo, but fix here.
+      Don't mention issue URL in commit messages.
+      Branch prefix depends on the issue type: Enhancement = feature, Bug = fix, Task = chore."
+END
     ;;
   start)
     start_command "$@"    
