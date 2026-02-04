@@ -9,8 +9,10 @@ CACHE_KEY=$1
 CACHE_DIR="`dirname "${BASH_SOURCE[0]}"`/jisho-cache"
 CACHE_FILE="$CACHE_DIR/$CACHE_KEY.json"
 
+mkdir -p $CACHE_DIR
+
 if [ ! -f $CACHE_FILE ]; then
-  http GET https://jisho.org/api/v1/search/words?keyword=$CACHE_KEY > $CACHE_FILE
+  curl -s https://jisho.org/api/v1/search/words?keyword=$CACHE_KEY -o $CACHE_FILE
 fi
 
 cat $CACHE_FILE | jq --raw-output '.data | map(select(.japanese[0].word)) | map("\(.japanese[0].word)\t\(.japanese[0].reading)\t\(.senses[0].parts_of_speech[0])\t\(.senses[0].english_definitions[0])")[]' | sed "s/\([^	]\{30\}\)[^	]*/\1/g" | column -s$'\t' -t
