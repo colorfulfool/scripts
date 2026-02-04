@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+trap ctrl_c INT
+
+function ctrl_c() {
+  echo "Disconnecting Tailscale..."
+  tailscale down
+}
+
+echo "Connecting Tailscale..."
+tailscale up && gcloud compute ssh asv-cld-stg-man01 --zone europe-west3-a --project asv-cld-host-stg --verbosity=debug -- -NL 35432:10.85.145.13:5432
+
