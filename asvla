@@ -191,7 +191,7 @@ case $1 in
       Branch prefix depends on the issue type: Enhancement = feature, Bug = fix, Task = chore."
 END
     ;;
-  start)
+  start|issue)
     start_command "$@"    
     ;;
   pr)
