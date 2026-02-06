@@ -100,7 +100,8 @@ function pr_command() {
     pr_body=""
   fi
 
-  suggested_title="$(humanize "$branch_name")"
+  title_base=$(echo "$branch_name" | sed -E 's|^[^/]*/[0-9]*-||')
+  suggested_title="$(humanize "$title_base")"
   pr_title=$(gum input --value "$suggested_title" --placeholder "PR title")
   git push -u origin "$branch_name" --quiet
   gh pr create --title "$pr_title" --body "$pr_body" --base main --head "$branch_name"
