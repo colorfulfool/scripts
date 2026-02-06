@@ -133,7 +133,16 @@ function qm_command() {
     pr_command
   fi
 
-  branch_issue_id=$(git branch --show-current | sed -n 's|^.*/\([0-9]*\)-.*|\1|p')
+  branch_name=$(git branch --show-current)
+  git push -u origin "$branch_name" --quiet
+
+  echo "Waiting for PR checks to complete..."
+  if ! gh pr checks --watch --fail-fast; then
+    echo "PR checks failed. Fix the issues before marking as QM Ready." >&2
+    exit 1
+  fi
+
+  branch_issue_id=$(echo "$branch_name" | sed -n 's|^.*/\([0-9]*\)-.*|\1|p')
   issue_id="${branch_issue_id:-$2}"
   [[ -z $issue_id ]] && { echo "Issue number missing" >&2; exit 1; }
 
