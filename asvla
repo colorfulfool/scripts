@@ -76,6 +76,10 @@ set_asvla_issue_status() {
 
 function start_command() {
   branch_title=$2
+  if [[ ! $branch_title =~ "-" ]]; then
+    echo "Include branch name, e.g. 1420-add-apple-pay or add-apple-pay"
+    exit 1
+  fi
   issue_id=$(echo $branch_title | sed -En 's|([0-9]+)-.*|\1|p')
   if [[ -n $issue_id ]]; then
     branch_name="$(fetch_issue_type $issue_id)/$branch_title"
