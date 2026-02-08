@@ -100,7 +100,7 @@ function pr_command() {
     pr_body=""
   fi
 
-  title_base=$(echo "$branch_name" | sed -E 's|^[^/]*/[0-9]*-||')
+  title_base=$(echo "$branch_name" | cut -d - -f2-)
   suggested_title="$(humanize "$title_base")"
   pr_title=$(gum input --value "$suggested_title" --placeholder "PR title")
   git push -u origin "$branch_name" --quiet
@@ -151,7 +151,8 @@ function qm_command() {
   issue_id="${branch_issue_id:-$2}"
   [[ -z $issue_id ]] && { echo "Issue number missing" >&2; exit 1; }
 
-  gh issue comment "$issue_id" --repo Asvla/bugs-and-requests --body "@davemakara Test on `cf-url`"
+  comment_body="${3:-@davemakara Test on \`cf-url\`}"
+  gh issue comment "$issue_id" --repo Asvla/bugs-and-requests --body "$comment_body"
   set_asvla_issue_status $issue_id "QM Ready"
 }
 
