@@ -13,6 +13,7 @@ Features:
 - Ensures each top-level chapter is in a separate file
 - Downscales cover image to 400px width
 - Removes all other illustrations
+- Removes back matter (References, Bibliography, Index, etc.)
 - Names output file based on book metadata and language
 """
 
@@ -60,6 +61,17 @@ NON_CHAPTER_KEYWORDS = [
     'title page', 'титульная страница',
     'about the author', 'об авторе',
     'also by', 'другие книги',
+]
+
+# Words that indicate back matter sections to remove (they throw off reading progress)
+BACK_MATTER_KEYWORDS = [
+    'bibliographic', 'bibliography', 'библиография',
+    'references', 'references',
+    'index', 'indexes', 'указатель',
+    'photo credits', 'photograph credits', 'credits',
+    'sources for maps', 'sources',
+    'about the author', 'about the authors', 'об авторе', 'об авторах',
+    'notes', 'endnotes', 'footnotes', 'примечания', 'сноски',
 ]
 
 # Patterns for detecting chapter text (pattern, base_confidence)
@@ -961,6 +973,193 @@ def remove_illustrations(extract_dir, cover_path=None):
     return removed
 
 
+def is_back_matter(title):
+    """Check if a title represents back matter to remove."""
+    if not title:
+        return False
+
+    title_lower = title.lower().strip()
+
+    for keyword in BACK_MATTER_KEYWORDS:
+        if keyword in title_lower:
+            return True
+
+    return False
+
+
+def detect_back_matter_files(ncx_path, opf_path):
+    """Detect back matter files from NCX navigation."""
+    if not ncx_path or not os.path.exists(ncx_path):
+        return []
+
+    tree = ET.parse(ncx_path)
+    root = tree.getroot()
+    ns = '{http://www.daisy.org/z3986/2005/ncx/}'
+
+    back_matter = []
+
+    nav_map = root.find(f'.//{ns}navMap')
+    if nav_map is None:
+        return []
+
+    for nav_point in nav_map.findall(f'{ns}navPoint'):
+        text_elem = nav_point.find(f'.//{ns}text')
+        content_elem = nav_point.find(f'{ns}content')
+
+        if text_elem is not None and content_elem is not None:
+            title = text_elem.text.strip() if text_elem.text else ''
+            src = content_elem.get('src', '')
+
+            if is_back_matter(title):
+                # Extract just the file path (without fragment)
+                file_path = src.split('#')[0]
+                back_matter.append({
+                    'file': file_path,
+                    'title': title,
+                    'nav_point': nav_point,
+                })
+
+    return back_matter
+
+
+def remove_back_matter(ncx_path, opf_path, extract_dir):
+    """Remove back matter sections from EPUB."""
+    if not ncx_path or not os.path.exists(ncx_path):
+        return []
+
+    back_matter = detect_back_matter_files(ncx_path, opf_path)
+
+    if not back_matter:
+        return []
+
+    ncx_dir = os.path.dirname(ncx_path)
+    opf_dir = os.path.dirname(opf_path)
+
+    # Parse NCX for modification
+    ncx_tree = ET.parse(ncx_path)
+    ncx_root = ncx_tree.getroot()
+    ncx_ns = '{http://www.daisy.org/z3986/2005/ncx/}'
+
+    # Parse OPF for modification
+    opf_tree = ET.parse(opf_path)
+    opf_root = opf_tree.getroot()
+    opf_ns = '{http://www.idpf.org/2007/opf}'
+
+    manifest = opf_root.find(f'.//{opf_ns}manifest')
+    spine = opf_root.find(f'.//{opf_ns}spine')
+    nav_map = ncx_root.find(f'.//{ncx_ns}navMap')
+
+    removed_files = []
+
+    for item in back_matter:
+        file_path = item['file']
+        title = item['title']
+        nav_point = item['nav_point']
+
+        # Get full file path
+        full_path = os.path.normpath(os.path.join(ncx_dir, file_path))
+
+        # Delete the file if it exists
+        if os.path.exists(full_path):
+            try:
+                os.remove(full_path)
+                removed_files.append(file_path)
+            except Exception:
+                continue
+
+        # Remove from NCX navMap
+        if nav_map is not None and nav_point is not None:
+            nav_map.remove(nav_point)
+
+        # Remove from OPF manifest and spine
+        if manifest is not None:
+            # Find the item by href
+            for manifest_item in manifest.findall(f'{opf_ns}item'):
+                href = manifest_item.get('href', '')
+                # Handle relative paths
+                item_path = os.path.normpath(os.path.join(opf_dir, href))
+                compare_path = os.path.normpath(os.path.join(opf_dir, file_path))
+                if item_path == compare_path or href == file_path:
+                    item_id = manifest_item.get('id')
+                    manifest.remove(manifest_item)
+
+                    # Remove from spine
+                    if spine is not None and item_id:
+                        for itemref in spine.findall(f'{opf_ns}itemref'):
+                            if itemref.get('idref') == item_id:
+                                spine.remove(itemref)
+                    break
+
+    # Remove pageList entries pointing to deleted files
+    page_list = ncx_root.find(f'.//{ncx_ns}pageList')
+    if page_list is not None:
+        for page_target in page_list.findall(f'{ncx_ns}pageTarget'):
+            content = page_target.find(f'{ncx_ns}content')
+            if content is not None:
+                src = content.get('src', '')
+                file_path = src.split('#')[0]
+                full_path = os.path.normpath(os.path.join(ncx_dir, file_path))
+                # Remove if file no longer exists
+                if not os.path.exists(full_path):
+                    page_list.remove(page_target)
+
+    # Remove navigation entries if nav.xhtml exists
+    nav_path = os.path.join(ncx_dir, '..', '9780735224391_nav.xhtml')
+    if not os.path.exists(nav_path):
+        # Try to find nav.xhtml
+        for root_dir, _, files in os.walk(extract_dir):
+            for file in files:
+                if file.endswith('_nav.xhtml') or file == 'nav.xhtml':
+                    nav_path = os.path.join(root_dir, file)
+                    break
+
+    if os.path.exists(nav_path):
+        try:
+            with open(nav_path, 'r', encoding='utf-8', errors='ignore') as f:
+                nav_content = f.read()
+
+            soup = BeautifulSoup(nav_content, 'xml')
+
+            # Find and remove TOC entries for back matter
+            nav = soup.find('nav', {'epub:type': 'toc'})
+            if nav:
+                for li in nav.find_all('li'):
+                    link = li.find('a')
+                    if link:
+                        text = link.get_text(strip=True).lower()
+                        if is_back_matter(text):
+                            li.decompose()
+
+            # Find and remove page-list entries
+            page_nav = soup.find('nav', {'epub:type': 'page-list'})
+            if page_nav:
+                for li in page_nav.find_all('li'):
+                    link = li.find('a')
+                    if link:
+                        href = link.get('href', '')
+                        file_path = href.split('#')[0]
+                        full_path = os.path.normpath(os.path.join(ncx_dir, file_path))
+                        if not os.path.exists(full_path):
+                            li.decompose()
+
+            with open(nav_path, 'w', encoding='utf-8') as f:
+                f.write(str(soup))
+        except Exception:
+            pass
+
+    # Save modified NCX
+    if removed_files:
+        ET.register_namespace('', 'http://www.daisy.org/z3986/2005/ncx/')
+        ncx_tree.write(ncx_path, encoding='utf-8', xml_declaration=True)
+
+        # Save modified OPF
+        ET.register_namespace('', 'http://www.idpf.org/2007/opf')
+        ET.register_namespace('dc', 'http://purl.org/dc/elements/1.1/')
+        opf_tree.write(opf_path, encoding='utf-8', xml_declaration=True)
+
+    return removed_files
+
+
 def check_chapter_separation(ncx_path):
     """Check if each top-level chapter is in a separate file."""
     if not ncx_path or not os.path.exists(ncx_path):
@@ -1299,6 +1498,16 @@ def main():
         else:
             print("   No illustrations found")
 
+        # Remove back matter
+        print("\n8. Removing back matter...")
+        back_matter_removed = remove_back_matter(ncx_path, opf_path, extract_dir)
+        if back_matter_removed:
+            print(f"   ✓ Removed {len(back_matter_removed)} back matter section(s):")
+            for section in back_matter_removed:
+                print(f"     - {section}")
+        else:
+            print("   No back matter sections found")
+
         # Generate output filename
         output_filename = generate_output_filename(metadata, input_path)
         output_dir = os.path.dirname(os.path.abspath(input_path))
@@ -1306,7 +1515,7 @@ def main():
 
 
         # Create output EPUB
-        print(f"\n8. Creating output EPUB...")
+        print(f"\n9. Creating output EPUB...")
         create_epub(extract_dir, output_path)
         print(f"   Output: {output_path}")
 
